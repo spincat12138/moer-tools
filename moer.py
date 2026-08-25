@@ -1673,7 +1673,7 @@ def xd(s, str2, xz, num):
         getinfo(a[xz][80:82], 2), getinfo(a[xz][45:47], 2), getinfo(a[xz][74:76], 2)))
 
     if num == -1:
-        num = int(input('选择丸子1绿色成长2红色成长3大成长4紫色五项5红色五项(按0退出)')) - 1
+        num = int(input('选择丸子1绿色成长2红色成长3大丸子4紫色五项5红色五项(按0退出)')) - 1
 
     if num == 0 or num == 1:
         if cz == 0:
@@ -1686,7 +1686,7 @@ def xd(s, str2, xz, num):
                 print('洗成长成功')
                 cz = 0
                 return 0
-    if num == 3 or num == 4:
+    if num == 3 or num == 4 or num == 2:
         dqwx = [getinfo(a[xz][70:72], 2), getinfo(a[xz][76:78], 2), getinfo(a[xz][78:80], 2), getinfo(a[xz][80:82], 2),
                 getinfo(a[xz][74:76], 2)]
         if wx == [0, 0, 0, 0, 0]:
@@ -1695,11 +1695,16 @@ def xd(s, str2, xz, num):
             eatwz(s, str2, a[xz], num, xz)
         else:
             b = 0
-            for i in range(0, 4):
+            for i in [0, 1, 3]:
                 if wx[i] > dqwx[i] and wx[i] != 0:
                     print('不满足')
                     b = 1
                     break
+
+            if wx[2] < dqwx[2] and wx[2] != 0:
+                if b != 1:
+                    print('不满足')
+                    b = 1
 
             if wx[4] < dqwx[4] and wx[4] != 0:
                 if b != 1:
