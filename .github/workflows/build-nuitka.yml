@@ -44,6 +44,8 @@ jobs:
           output-file: ${{ matrix.name }}.exe
           windows-console-mode: force
           product-name: ${{ matrix.name }}
+          product-version: "1.0.0"
+          file-version: "1.0.0"
           file-description: ${{ matrix.name }} executable
           assume-yes-for-downloads: true
 
