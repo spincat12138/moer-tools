@@ -1729,6 +1729,20 @@ def eatwz(s, str2, pet, num, xz):
     xd(s, str2, xz, num)
 
 
+def fetch_item(s, str2, item_id, quantity):
+    '''
+    从背包或者仓库中获取指定id的物品，quantity为获取物品的数量
+    '''
+    item_id = int(item_id)
+    item_id_bytes = [item_id // 65536, item_id // 256 % 256, item_id % 256]
+    quantity_bytes = [quantity // 256, quantity % 256]
+    packet = [0, 0, 0, 30, 4, 99, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 0, 0, *item_id_bytes, 0, 0,
+              *quantity_bytes]
+    t1 = tuple(packet)
+    req = struct.pack(*('30B',), *t1)
+    s.send(req)
+
+
 def kd(s, str2):
     petid = int(input(['请输入开蛋的编号']))
     packet = [0, 0, 0, 22, 7, 208, *str2, 0, 0, 5, 179, 0, 0, 0, 0, *str2]
@@ -1754,10 +1768,7 @@ def kd(s, str2):
     con = ''
     petcount = 0
     while con == '':
-        packet = [0, 0, 0, 30, 4, 99, *str2, 0, 0, 6, 31, 0, 0, 0, 0, 0, 0, 0, 0, 0, *s1, 0, 0, 0, 6]
-        t1 = tuple(packet)
-        req = struct.pack(*('30B',), *t1)
-        s.send(req)
+        fetch_item(s, str2, petid, 6)
         packet = [0, 0, 0, 22, 4, 106, *str2, 0, 0, 5, 77, 0, 0, 0, 0, 0, *s1]
         for i in range(6):
             t1 = tuple(packet)
