@@ -202,7 +202,7 @@ def kaipai(uid, pwd, model, fwq=0):
             if m == 8:
                 excrystal(s2, str2)
             if m == 9:
-                type = int(input(['请输入要兑换的物品：1巨石碎片->奖牌,2奖牌->宝物,3巨石->大丸子']))
+                type = int(input(['请输入要兑换的物品：1巨石碎片->奖牌,2巨石碎片->宝物,3巨石碎片->大丸子']))
                 count = int(input(['请输入兑换数量']))
                 exchangelb(s2, str2, type, count)
             if m == 123:
@@ -1569,20 +1569,33 @@ def openzybox(s, str2):
             print('清理完毕')
 
 
-def excrystal(s, str2):
-    md = int(input(['请输入水晶兑换的物品:1基姆箱子,2五项丸子']))
-    if md == 1:
-        packet = [0, 0, 0, 26, 4, 104, *str2, 0, 0, 5, 92, 0, 0, 0, 0, 0, 0, 39, 70, 0, 0]
-    elif md == 2:
-        packet = [0, 0, 0, 26, 4, 104, *str2, 0, 0, 5, 198, 0, 0, 0, 0, 0, 0, 39, 72, 0, 0]
-    else:
-        return
-    num = int(input(['请输入兑换的数量']))
-    num = hex(num)[2:].zfill(4)
-    packet = packet + [int(num[0:2], base=16), int(num[2:4], base=16)]
+def exchange_item(s, str2, npc_id, item_index, quantity):
+    '''
+    兑换物品(水晶、巨石碎片等)
+    :param s: socket连接
+    :param str2: 玩家米米号
+    :param npc_id: NPC ID
+    :param item_index: 物品索引
+    :param quantity: 数量
+    '''
+    quantity_byte = [quantity // 256, quantity % 256]
+    packet = [0, 0, 0, 0x1a, 0x04, 0x68, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0, 0,
+              npc_id, item_index, 0, 0, *quantity_byte]
     t1 = tuple(packet)
     req = struct.pack(*('26B',), *t1)
     s.send(req)
+
+
+def excrystal(s, str2):
+    md = int(input(['请输入水晶兑换的物品:1基姆箱子,2五项丸子']))
+    if md == 1:
+        item_index = 0x46
+    elif md == 2:
+        item_index = 0x48
+    else:
+        return
+    quantity = int(input(['请输入兑换的数量']))
+    exchange_item(s, str2, 0x27, item_index, quantity)
     print('兑换成功')
 
 
@@ -1731,7 +1744,11 @@ def eatwz(s, str2, pet, num, xz):
 
 def fetch_item(s, str2, item_id, quantity):
     '''
-    从背包或者仓库中获取指定id的物品，quantity为获取物品的数量
+    从背包或者仓库中获取指定id的物品
+    :param s: socket连接
+    :param str2: 玩家米米号
+    :param item_id: 物品ID
+    :param quantity: 数量
     '''
     item_id = int(item_id)
     item_id_bytes = [item_id // 65536, item_id // 256 % 256, item_id % 256]
@@ -2046,19 +2063,31 @@ def battle(s, str2, position):
             _, s, str2 = login_taomi(mmh, mmh_mm, model=1, fwq=0)
 
 def exchangelb(s, str2, type, count):
-    if type == 1:
-        packet = [0, 0, 0, 0x1a, 0x04, 0x68, *str2, 0, 0, 0x05, 0x1a, 0, 0, 0, 0, 0, 0, 0x4e, 0x72, 0, 0, 0, 0x01]
-    elif type == 2:
-        packet = [0, 0, 0, 0x1a, 0x04, 0x68, *str2, 0, 0, 0x06, 0x59, 0, 0, 0, 0, 0, 0, 0x27, 0x79, 0, 0, 0, 0x01]
-    elif type == 3:
-        packet = [0, 0, 0, 0x1a, 0x04, 0x68, *str2, 0, 0, 0x04, 0x8b, 0, 0, 0, 0, 0, 0, 0x4e, 0x74, 0, 0, 0, 0x01]
+    if count <= 0:
+        print('兑换数量必须大于0')
+        return
+    if type == 1: # 巨石碎片->奖牌(7:1),2,3巨石->大丸子
+        for i in range(count):
+            fetch_item(s, str2, 290011, 7)
+            exchange_item(s, str2, 0x4e, 0x72, 1)    
+    elif type == 2: # 巨石碎片->奖牌->宝物(4*7:1)
+        for i in range(count):
+            fetch_item(s, str2, 290011, 28)
+            exchange_item(s, str2, 0x4e, 0x72, 4) 
+            exchange_item(s, str2, 0x27, 0x79, 1)    
+    elif type == 3: # 巨石碎片->大丸子(2:1)
+        max_batch_size = 50
+        remaining_count = count
+        while remaining_count > 0:
+            batch_size = min(remaining_count, max_batch_size)
+            fetch_item(s, str2, 290011, batch_size * 2)
+            exchange_item(s, str2, 0x4e, 0x74, batch_size)
+            remaining_count -= batch_size
+            time.sleep(0.1) 
     else:
         print('兑换类型错误')
         return
-    t1 = tuple(packet)
-    req = struct.pack(*('26B',), *t1)
-    for i in range(count):
-        s.send(req)
+
     print('兑换成功')
 
 

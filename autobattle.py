@@ -251,12 +251,12 @@ def battle_loop(s2, str2):
         # time.sleep(0.1)
         
         # 1. 传送至新生巨石蟹 (固定包头)
-        packet = [0, 0, 0, 0x26, 3, 0xec, *str2, 0, 0, 5, 0xc8, 0, 0, 0, 0, 0, 0, 0x75, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0x8b, 0, 0, 0x01, 0x5d, 0, 0, 0, 0]
+        packet = [0, 0, 0, 0x26, 3, 0xec, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x75, 0xfb, 0, 0, 0, 0, 0, 0, 0, 0x8b, 0, 0, 0x01, 0x5d, 0, 0, 0, 0]
         s2.send(struct.pack('38B', *packet))
         time.sleep(0.1)
         
         # 2. 刷明雷战斗
-        packet = [0, 0, 0, 0x1a, 0x05, 0x18, *str2, 0, 0, 5, 0xbb, 0, 0, 0, 0, 0, 0, 0x09, 0xc8, 0, 0, 0, 0]
+        packet = [0, 0, 0, 0x1a, 0x05, 0x18, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x09, 0xc8, 0, 0, 0, 0]
         s2.send(struct.pack('26B', *packet))
         time.sleep(0.1)
         
