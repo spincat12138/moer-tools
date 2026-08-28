@@ -208,6 +208,8 @@ def kaipai(uid, pwd, model, fwq=0):
             if m == 123:
                 position = int(input(['请输入地点：1海滩，2草木树海']))
                 battle(s2, str2, position)
+            if m == 999:
+                _get_equipment_info(s2, str2)
         s.close()
         s2.close()
         print('成功退出')
@@ -1333,8 +1335,13 @@ def getinfo(str, scale=4):
     return sum
 
 
-def cleanequipment(s, str2):
-    print('正在清理装备')
+def _get_equipment_info(s, str2):
+    """
+    获取背包内装备的原始信息
+    :param s: socket连接
+    :param str2: 米米号
+    :return: 装备信息列表和装备数量
+    """
     packet = [0, 0, 0, 18, 4, 78, *str2, 0, 0, 4, 201, 0, 0, 0, 0]
     t1 = tuple(packet)
     req = struct.pack(*('18B',), *t1)
@@ -1380,6 +1387,13 @@ def cleanequipment(s, str2):
 
     # for x in range(num):
     #         print('您的第%d件装备代码是：%d,编号是' % (x + 1, getinfo(a[x][4:8])), ''.join(hex(i)[2:].zfill(2).upper() for i in a[x][0:4]))
+
+    return a, num
+
+
+def cleanequipment(s, str2):
+    print('正在清理装备')
+    a, num = _get_equipment_info(s, str2)
 
     for x in range(num):
         inid = getinfo(a[x][4:8])
@@ -1569,7 +1583,7 @@ def openzybox(s, str2):
             print('清理完毕')
 
 
-def exchange_item(s, str2, npc_id, item_index, quantity):
+def _exchange_item(s, str2, npc_id, item_index, quantity):
     '''
     兑换物品(水晶、巨石碎片等)
     :param s: socket连接
@@ -1595,7 +1609,7 @@ def excrystal(s, str2):
     else:
         return
     quantity = int(input(['请输入兑换的数量']))
-    exchange_item(s, str2, 0x27, item_index, quantity)
+    _exchange_item(s, str2, 0x27, item_index, quantity)
     print('兑换成功')
 
 
@@ -1742,9 +1756,9 @@ def eatwz(s, str2, pet, num, xz):
     xd(s, str2, xz, num)
 
 
-def fetch_item(s, str2, item_id, quantity):
+def _fetch_item_from_home(s, str2, item_id, quantity):
     '''
-    从背包或者仓库中获取指定id的物品
+    从仓库中获取指定id的物品
     :param s: socket连接
     :param str2: 玩家米米号
     :param item_id: 物品ID
@@ -1785,7 +1799,7 @@ def kd(s, str2):
     con = ''
     petcount = 0
     while con == '':
-        fetch_item(s, str2, petid, 6)
+        _fetch_item_from_home(s, str2, petid, 6)
         packet = [0, 0, 0, 22, 4, 106, *str2, 0, 0, 5, 77, 0, 0, 0, 0, 0, *s1]
         for i in range(6):
             t1 = tuple(packet)
@@ -1886,7 +1900,7 @@ def kd(s, str2):
                     return
             for b in range(i):
                 fpexp(625, a[b], str2, s)
-                fanghui(a[b], str2, s)
+                _pet_back_home(s, str2, a[b])
                 if b % 2 == 1:
                     print('进行碰蛋')
                     pengdan(a[b], a[b - 1], str2, s)
@@ -1897,15 +1911,21 @@ def kd(s, str2):
             con = 0
 
 
-def fanghui(pet, str2, s):
-    packet = [0, 0, 0, 26, 6, 15, *str2, 0, 0, 5, 93, 0, 0, 0, 0, *pet[0:4], 0, 0, 0, 0]
+def _pet_back_home(s, str2, pet):
+    '''
+    宠物放回仓库
+    :param s: socket连接
+    :param str2: 玩家米米号
+    :param pet: 宠物信息
+    '''
+    packet = [0, 0, 0, 0x1a, 0x06, 0x0f, *str2, 0, 0, 5, 93, 0, 0, 0, 0, *pet[0:4], 0, 0, 0, 0]
     t1 = tuple(packet)
     req = struct.pack(*('26B',), *t1)
     s.send(req)
 
 
 def pengdan(pet1, pet2, str2, s):
-    packet = [0, 0, 0, 26, 6, 23, *str2, 0, 0, 5, 141, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+    packet = [0, 0, 0, 0x1a, 0x06, 0x17, *str2, 0, 0, 5, 141, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
     t1 = tuple(packet)
     req = struct.pack(*('26B',), *t1)
     s.send(req)
@@ -2067,21 +2087,31 @@ def exchangelb(s, str2, type, count):
         print('兑换数量必须大于0')
         return
     if type == 1: # 巨石碎片->奖牌(7:1),2,3巨石->大丸子
-        for i in range(count):
-            fetch_item(s, str2, 290011, 7)
-            exchange_item(s, str2, 0x4e, 0x72, 1)    
+        max_batch_size = 50
+        remaining_count = count
+        while remaining_count > 0:
+            batch_size = min(remaining_count, max_batch_size)
+            _fetch_item_from_home(s, str2, 290011, batch_size * 7)
+            _exchange_item(s, str2, 0x4e, 0x72, batch_size)  
+            remaining_count -= batch_size
+            time.sleep(0.1)               
     elif type == 2: # 巨石碎片->奖牌->宝物(4*7:1)
-        for i in range(count):
-            fetch_item(s, str2, 290011, 28)
-            exchange_item(s, str2, 0x4e, 0x72, 4) 
-            exchange_item(s, str2, 0x27, 0x79, 1)    
+        max_batch_size = 50
+        remaining_count = count
+        while remaining_count > 0:
+            batch_size = min(remaining_count, max_batch_size)
+            _fetch_item_from_home(s, str2, 290011, batch_size * 28)
+            _exchange_item(s, str2, 0x4e, 0x72, batch_size * 4) 
+            _exchange_item(s, str2, 0x27, 0x79, batch_size)  
+            remaining_count -= batch_size
+            time.sleep(0.1)               
     elif type == 3: # 巨石碎片->大丸子(2:1)
         max_batch_size = 50
         remaining_count = count
         while remaining_count > 0:
             batch_size = min(remaining_count, max_batch_size)
-            fetch_item(s, str2, 290011, batch_size * 2)
-            exchange_item(s, str2, 0x4e, 0x74, batch_size)
+            _fetch_item_from_home(s, str2, 290011, batch_size * 2)
+            _exchange_item(s, str2, 0x4e, 0x74, batch_size)
             remaining_count -= batch_size
             time.sleep(0.1) 
     else:
