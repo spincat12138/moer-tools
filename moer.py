@@ -209,7 +209,7 @@ def kaipai(uid, pwd, model, fwq=0):
                 position = int(input(['请输入地点：1海滩，2草木树海']))
                 battle(s2, str2, position)
             if m == 999:
-                _get_equipment_info(s2, str2)
+                _get_equipment_bag_info(s2, str2)
         s.close()
         s2.close()
         print('成功退出')
@@ -1335,34 +1335,51 @@ def getinfo(str, scale=4):
     return sum
 
 
-def _get_equipment_info(s, str2):
+def _get_equipment_bag_info(s, str2):
     """
-    获取背包内装备的原始信息
+    获取并解析背包内装备信息。
     :param s: socket连接
     :param str2: 米米号
-    :return: 装备信息列表和装备数量
+    :return: 结构化装备信息列表和装备数量
     """
     packet = [0, 0, 0, 18, 4, 78, *str2, 0, 0, 4, 201, 0, 0, 0, 0]
     t1 = tuple(packet)
     req = struct.pack(*('18B',), *t1)
     s.send(req)
-    rec = s.recv(10000)
-    s.send(req)
-    rec1 = s.recv(10000)
-    r = tuple(rec1)
+
+    # 登录阶段可能还留有其他响应；按包头长度拆包，直到收到完整的装备列表响应。
+    recv_buffer = bytearray()
     times = 0
-    while r.__len__() < 22 or r[5] != 78 or r.__len__() < 22 + 96 * r[21]:
-        s.send(req)
+    r = None
+    while r is None:
         rec = s.recv(10000)
-        s.send(req)
-        rec1 = s.recv(10000)
-        r = tuple(rec1)
-        time.sleep(0.5)
-        if times < 20:
-            times += 1
-        else:
-            print('%s获取装备列表失败' % str2)
+        if not rec:
+            print('%s获取装备列表失败：连接已关闭' % str2)
             exit(0)
+        recv_buffer.extend(rec)
+
+        while len(recv_buffer) >= 4:
+            frame_length = int.from_bytes(recv_buffer[:4], byteorder='big')
+            if frame_length < 22:
+                print('%s获取装备列表失败：响应包长度无效' % str2)
+                exit(0)
+            if len(recv_buffer) < frame_length:
+                break
+
+            frame = bytes(recv_buffer[:frame_length])
+            del recv_buffer[:frame_length]
+            if frame[5] != 78:
+                continue
+
+            candidate = tuple(frame)
+            if len(candidate) < 22 + 96 * candidate[21]:
+                times += 1
+                if times > 20:
+                    print('%s获取装备列表失败：装备数据不完整' % str2)
+                    exit(0)
+                continue
+            r = candidate
+            break
 
     num = r[21]
     # print('共有%d件装备' % num)
@@ -1385,31 +1402,77 @@ def _get_equipment_info(s, str2):
         b += 1
         k += 1
 
-    # for x in range(num):
-    #         print('您的第%d件装备代码是：%d,编号是' % (x + 1, getinfo(a[x][4:8])), ''.join(hex(i)[2:].zfill(2).upper() for i in a[x][0:4]))
+    equipment_info = []
+    for record in a:
+        item = {
+            # 记录 0:4：装备实例编号。
+            'instance_id': tuple(record[0:4]),
+            # 记录 4:8：装备代码（物品类型 ID）。
+            'item_id': getinfo(record[4:8]),
+            # 记录 16:18：装备品质代码。
+            'quality': getinfo(record[16:18], 2),
+            # 记录 22:24：当前耐久度。
+            'durability': getinfo(record[22:24], 2),
+            # 记录 24:26：最大耐久度。
+            'max_durability': getinfo(record[24:26], 2),
+            # 记录 28:30：最大生命值加成。
+            'max_hp': getinfo(record[28:30], 2),
+            # 记录 32:34：最大魔力值加成。
+            'max_mp': getinfo(record[32:34], 2),
+            # 记录 34:36：攻击力。
+            'attack': getinfo(record[34:36], 2),
+            # 记录 36:38：魔法攻击力。
+            'magic_attack': getinfo(record[36:38], 2),
+            # 记录 38:40：防御力。
+            'defense': getinfo(record[38:40], 2),
+            # 记录 40:42：抗魔力。
+            'magic_defense': getinfo(record[40:42], 2),
+            # 记录 42:44：速度。
+            'speed': getinfo(record[42:44], 2),
+            # 记录 44:46：精神力。
+            'spirit': getinfo(record[44:46], 2),
+            # 记录 46:48：恢复力。
+            'recovery': getinfo(record[46:48], 2),
+            # 记录 48:50：命中率。
+            'hit': getinfo(record[48:50], 2),
+            # 记录 50:52：回避率。
+            'dodge': getinfo(record[50:52], 2),
+            # 记录 52:54：必杀率。
+            'critical': getinfo(record[52:54], 2),
+            # 记录 54:56：反击率。
+            'counter': getinfo(record[54:56], 2),
+            # 记录 90:92：宝石鉴定状态，样本中 1=未鉴定、2=已鉴定。
+            'gem_identification_status': getinfo(record[90:92], 2),
+            # 记录 95：宝石孔数量。
+            'socket_count': record[95],
+            # 记录 96 之后：每个宝石孔对应一个 4 字节宝石代码。
+            'gem_ids': [getinfo(record[96 + i * 4:100 + i * 4]) for i in range(record[95])],
+        }
+        equipment_info.append(item)
 
-    return a, num
+    return equipment_info, num
 
 
 def cleanequipment(s, str2):
     print('正在清理装备')
-    a, num = _get_equipment_info(s, str2)
+    equipment_info, num = _get_equipment_bag_info(s, str2)
 
     for x in range(num):
-        inid = getinfo(a[x][4:8])
+        item = equipment_info[x]
+        inid = item['item_id']
         if (inid >= 80074 and inid <= 80077) or (inid >= 130005 and inid <= 130006) or (
                 inid >= 130007 and inid <= 130011) or (inid >= 120001 and inid <= 120004) or (
                 inid >= 130001 and inid <= 130004):
             if (inid >= 130007 and inid <= 130011) or (inid >= 120001 and inid <= 120004) or (
                     inid >= 130001 and inid <= 130004):
-                packet = [0, 0, 0, 26, 4, 87, *str2, 0, 0, 5, 4, 0, 0, 0, 0, 0, 0, 0, 1, *a[x][0:4]]
+                packet = [0, 0, 0, 26, 4, 87, *str2, 0, 0, 5, 4, 0, 0, 0, 0, 0, 0, 0, 1, *item['instance_id']]
                 t1 = tuple(packet)
                 req = struct.pack(*('26B',), *t1)
                 s.send(req)
                 print('代码%d装备已出售' % inid)
                 time.sleep(0.1)
             else:
-                packet = [0, 0, 0, 22, 4, 80, *str2, 0, 0, 6, 81, 0, 0, 0, 0, *a[x][0:4]]
+                packet = [0, 0, 0, 22, 4, 80, *str2, 0, 0, 6, 81, 0, 0, 0, 0, *item['instance_id']]
                 t1 = tuple(packet)
                 req = struct.pack(*('22B',), *t1)
                 s.send(req)
