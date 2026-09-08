@@ -5,6 +5,8 @@ from uncompyle6.parsers.reducecheck import tryexcept
 
 cz = 0
 wx = [0, 0, 0, 0, 0]
+xd_count = 0
+xd_max_count = 0
 mmh = 0
 mmh_mm = 0
 
@@ -196,7 +198,7 @@ def kaipai(uid, pwd, model, fwq=0):
             if m == 5:
                 fscw(s2, str2)
             if m == 6:
-                xd(s2, str2, -1, -1)
+                xd_menu(s2, str2)
             if m == 7:
                 kd(s2, str2)
             if m == 8:
@@ -1766,123 +1768,166 @@ def openbook(s, str2):
             time.sleep(0.5)
 
 
+def _reset_xd_state():
+    """清理一次洗点流程的临时状态，避免下一次洗点继承上次目标。"""
+    global cz, wx, xd_count, xd_max_count
+    cz = 0
+    wx = [0, 0, 0, 0, 0]
+    xd_count = 0
+    xd_max_count = 0
+
+
+def xd_menu(s, str2):
+    """洗点子菜单；每次结束后重新选择宠物，输入 0 返回主功能菜单。"""
+    while not xd(s, str2, -1, -1):
+        pass
+
+
 def xd(s, str2, xz, num):
     global cz
     global wx
-    packet = [0, 0, 0, 18, 6, 18, *str2, 0, 0, 4, 227, 0, 0, 0, 0]
-    t1 = tuple(packet)
-    req = struct.pack(*('18B',), *t1)
-    s.send(req)
-    rec = s.recv(2048)
-    s.send(req)
-    rec1 = s.recv(2048)
-    r = tuple(rec1)
-    times = 0
-    while r.__len__() < 22 or r[4] * 256 + r[5] != 1554:
-        s.send(req)
-        rec = s.recv(2048)
-        s.send(req)
-        rec1 = s.recv(2048)
-        r = tuple(rec1)
-        time.sleep(0.5)
-        if times < 20:
-            times += 1
-        else:
-            print('%s加载宠物列表失败' % str2)
-            exit(0)
+    global xd_count
+    global xd_max_count
 
-    i = r[21]
-
-    x = 0
-    a = [[] for b in range(i)]
-    b = 22
-    k = 0
-    t = 999
-    while b < r.__len__():
-        if k == t:
-            if x < i - 1:
-                x += 1
-                k = 0
-                t = 999
-            else:
-                break
-        a[x].append(int(r[b]))
-        if k == 99:
-            t = 106 + int(r[b]) * 9
-        b += 1
-        k += 1
-
+    # xz == -1 只出现在一次新的洗点流程开始时；递归刷新宠物数据时保留状态。
     if xz == -1:
-        print('共有%d只宠物' % i)
-        for x in range(i):
-            print('您的第%d个宠物是：%s,等级是%d,转生次数%d,已分配经验%d,转生所需经验%d' % (x + 1, getname(a[x][13:31]),
-                                                                                           a[x][32], a[x][-5],
-                                                                                           getexp(a[x][33:37]),
-                                                                                           jsexp(a[x][-5], 0) - getexp(
-                                                                                               a[x][33:37])))
+        _reset_xd_state()
 
-        xz = int(input('[请选择要洗点的精灵]')) - 1
+    while True:
+        a = _load_xd_pets(s, str2)
 
-    print('成长%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
-        a[xz][-29], _byte_to_int(a[xz][37:39], 2), _byte_to_int(a[xz][70:72], 2), _byte_to_int(a[xz][39:41], 2),
-        _byte_to_int(a[xz][76:78], 2), _byte_to_int(a[xz][41:43], 2), _byte_to_int(a[xz][78:80], 2), _byte_to_int(a[xz][43:45], 2),
-        _byte_to_int(a[xz][80:82], 2), _byte_to_int(a[xz][45:47], 2), _byte_to_int(a[xz][74:76], 2)))
+        if xz == -1:
+            print('共有%d只宠物' % len(a))
+            for x in range(len(a)):
+                print('您的第%d个宠物是：%s,等级是%d,转生次数%d,已分配经验%d,转生所需经验%d' % (
+                    x + 1, getname(a[x][13:31]), a[x][32], a[x][-5], getexp(a[x][33:37]),
+                    jsexp(a[x][-5], 0) - getexp(a[x][33:37])))
 
-    if num == -1:
-        num = int(input('选择丸子1绿色成长2红色成长3大丸子4紫色五项5红色五项(按0退出)')) - 1
+            pet_number = int(input('[请选择要洗点的精灵，按0退出]'))
+            if pet_number == 0:
+                _reset_xd_state()
+                return True
+            if pet_number < 1 or pet_number > len(a):
+                print('宠物编号不存在')
+                continue
+            xz = pet_number - 1
 
-    if num == 0 or num == 1:
-        if cz == 0:
-            cz = int(input(['请输入目标成长']))
-            eatwz(s, str2, a[xz], num, xz)
-        else:
-            if a[xz][-29] < cz:
-                eatwz(s, str2, a[xz], num, xz)
-            else:
-                print('洗成长成功')
-                cz = 0
-                return 0
-    if num == 3 or num == 4 or num == 2:
-        dqwx = [_byte_to_int(a[xz][70:72], 2), _byte_to_int(a[xz][76:78], 2), _byte_to_int(a[xz][78:80], 2), _byte_to_int(a[xz][80:82], 2),
-                _byte_to_int(a[xz][74:76], 2)]
-        if wx == [0, 0, 0, 0, 0]:
-            b = input(['请输入五项'])
-            wx = [int(n) for n in b.split(' ')]
-            eatwz(s, str2, a[xz], num, xz)
-        else:
-            b = 0
+        pet = a[xz]
+        print('成长%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
+            pet[-29], _byte_to_int(pet[37:39], 2), _byte_to_int(pet[70:72], 2), _byte_to_int(pet[39:41], 2),
+            _byte_to_int(pet[76:78], 2), _byte_to_int(pet[41:43], 2), _byte_to_int(pet[78:80], 2),
+            _byte_to_int(pet[43:45], 2), _byte_to_int(pet[80:82], 2), _byte_to_int(pet[45:47], 2),
+            _byte_to_int(pet[74:76], 2)))
+
+        if num == -1:
+            num = int(input('选择丸子1绿色成长2红色成长3大丸子4紫色五项5红色五项(按0退出)')) - 1
+            if num == -1:
+                _reset_xd_state()
+                return False
+
+        if num == 0 or num == 1:
+            if cz == 0:
+                cz = int(input(['请输入目标成长']))
+            if pet[-29] >= cz:
+                print('洗成长成功，一共洗点%d次' % xd_count)
+                _reset_xd_state()
+                return False
+            eatwz(s, str2, pet, num)
+            continue
+
+        if num == 3 or num == 4 or num == 2:
+            dqwx = [_byte_to_int(pet[70:72], 2), _byte_to_int(pet[76:78], 2), _byte_to_int(pet[78:80], 2),
+                    _byte_to_int(pet[80:82], 2), _byte_to_int(pet[74:76], 2)]
+
+            # 用次数是否已设置判断是否为首次进入，允许五项目标全部填写 0。
+            if xd_max_count == 0:
+                wx = [int(n) for n in input(['请输入五项:(体力/力量/耐力/速度/魔力) 体力/力量/速度为不低于设定数值，耐力/防御/魔力为不高于设定数值，0为不判断']).split(' ')]
+                if len(wx) != 5:
+                    print('请输入5个用空格分隔的数值')
+                    _reset_xd_state()
+                    return False
+                xd_max_count = int(input('请输入洗点次数'))
+                if xd_max_count <= 0:
+                    print('洗点次数必须大于0')
+                    _reset_xd_state()
+                    return False
+                eatwz(s, str2, pet, num)
+                continue
+
+            is_satisfied = True
             for i in [0, 1, 3]:
                 if wx[i] > dqwx[i] and wx[i] != 0:
-                    print('不满足')
-                    b = 1
+                    is_satisfied = False
                     break
-
             if wx[2] < dqwx[2] and wx[2] != 0:
-                if b != 1:
-                    print('不满足')
-                    b = 1
-
+                is_satisfied = False
             if wx[4] < dqwx[4] and wx[4] != 0:
-                if b != 1:
-                    print('不满足')
-                    b = 1
+                is_satisfied = False
 
-            if b == 1:
-                eatwz(s, str2, a[xz], num, xz)
-            else:
-                print('洗点成功')
-                return 0
+            if is_satisfied:
+                print('洗点成功，一共洗点%d次' % xd_count)
+                _reset_xd_state()
+                return False
+            if xd_count >= xd_max_count:
+                print('已达到指定洗点次数，一共洗点%d次' % xd_count)
+                _reset_xd_state()
+                return False
+
+            print('不满足')
+            eatwz(s, str2, pet, num)
+            continue
+
+        print('丸子编号不存在')
+        _reset_xd_state()
+        return False
 
 
-def eatwz(s, str2, pet, num, xz):
+def _load_xd_pets(s, str2):
+    packet = [0, 0, 0, 18, 6, 18, *str2, 0, 0, 4, 227, 0, 0, 0, 0]
+    req = struct.pack(*('18B',), *tuple(packet))
+    times = 0
+    while True:
+        s.send(req)
+        s.recv(2048)
+        s.send(req)
+        r = tuple(s.recv(2048))
+        if len(r) >= 22 and r[4] * 256 + r[5] == 1554:
+            break
+        times += 1
+        if times > 20:
+            print('%s加载宠物列表失败' % str2)
+            exit(0)
+        time.sleep(0.5)
+
+    pet_count = r[21]
+    pets = [[] for _ in range(pet_count)]
+    pet_index = 0
+    byte_index = 0
+    pet_length = 999
+    for value in r[22:]:
+        if byte_index == pet_length:
+            if pet_index >= pet_count - 1:
+                break
+            pet_index += 1
+            byte_index = 0
+            pet_length = 999
+        pets[pet_index].append(int(value))
+        if byte_index == 99:
+            pet_length = 106 + int(value) * 9
+        byte_index += 1
+    return pets
+
+
+def eatwz(s, str2, pet, num):
+    global xd_count
     wanzi = [350013, 360008, 360038, 350014, 360009]
     packet = [0, 0, 0, 26, 6, 34, *str2, 0, 0, 5, 172, 0, 0, 0, 0, *pet[0:4], 0, int(wanzi[num] / 65536),
               int(wanzi[num] % 65536 / 256), int(wanzi[num] % 256)]
     t1 = tuple(packet)
     req = struct.pack(*('26B',), *t1)
     s.send(req)
+    xd_count += 1
     time.sleep(0.2)
-    xd(s, str2, xz, num)
 
 
 def _fetch_item_from_store(s, str2, item_id, quantity):
