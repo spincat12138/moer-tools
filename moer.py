@@ -67,7 +67,7 @@ def login_interface(myfile='account.txt'):
             exit(1)
 
 
-def get_account(myfile):
+def get_account(myfile='account.txt'):
     with open(myfile, 'r') as file:
         content = file.read()
     account = {}
@@ -81,7 +81,7 @@ def get_account(myfile):
             account[uid] = pwd1
     return account
 
-def login_taomi(uid, pwd, model, fwq):
+def login_taomi(uid, pwd, model=1, fwq=0):
     uid_hex = hex(uid)
     str1 = ''.join(uid_hex)
     str2 = list()
@@ -1375,7 +1375,8 @@ def _get_equipment_bag_info(s, str2):
 
         while len(recv_buffer) >= 4:
             packet_length = int.from_bytes(recv_buffer[:4], byteorder='big')
-            if packet_length < 22:
+            # 其他操作的响应可能只有 18 字节；只要能读取命令字节，就先拆包并跳过非装备响应。
+            if packet_length < 6:
                 print('%s获取装备列表失败：响应包长度无效' % str2)
                 exit(0)
             if len(recv_buffer) < packet_length:
@@ -1492,7 +1493,8 @@ def _get_prop_bag_info(s, str2):
 
         while len(recv_buffer) >= 4:
             packet_length = int.from_bytes(recv_buffer[:4], byteorder='big')
-            if packet_length < 22:
+            # 其他操作的响应可能只有 18 字节；只要能读取命令字节，就先拆包并跳过非道具响应。
+            if packet_length < 6:
                 print('%s获取道具列表失败：响应包长度无效' % str2)
                 exit(0)
             if len(recv_buffer) < packet_length:
@@ -1542,7 +1544,7 @@ def cleanequipment(s, str2):
                 _equipment_sell(s, str2, inid, item['instance_id'])
             else:
                 _equipment_discard(s, str2, inid, item['instance_id'])
-
+    print('装备清理完成')
 
 def openzybox(s, str2):
     zhiye = input(['请输入要开箱的职业拼音首字母，如 剑士:js'])
