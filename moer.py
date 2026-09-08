@@ -213,21 +213,21 @@ def kaipai(uid, pwd, model, fwq=0):
         s.close()
         s2.close()
         print('成功退出')
-    if model == 2:
-        zgz(s2, str2)
-        print('%d成功砸罐子翻牌' % uid)
-        clearbag(s2, str2)
-        cleanequipment(s2, str2)
-        time.sleep(3)
-        s.close()
-        s2.close()
-    if model == 3:
-        print("开始分经验")
-        fjy(s2, str2, 1)
-        time.sleep(3)
-        s.close()
-        s2.close()
-        print('%d分经验完毕' % uid)
+    # if model == 2:
+    #     zgz(s2, str2)
+    #     print('%d成功砸罐子翻牌' % uid)
+    #     clearbag(s2, str2)
+    #     cleanequipment(s2, str2)
+    #     time.sleep(3)
+    #     s.close()
+    #     s2.close()
+    # if model == 3:
+    #     print("开始分经验")
+    #     fjy(s2, str2, 1)
+    #     time.sleep(3)
+    #     s.close()
+    #     s2.close()
+    #     print('%d分经验完毕' % uid)
 
 
 def zgz(s, str2):
@@ -1246,7 +1246,7 @@ def fscw(s, str2):
     # r = tuple(rec)
     # print(r.__len__())
 
-    i = getinfo(r[28:30], 2)
+    i = _byte_to_int(r[28:30], 2)
     print('共有%d只宠物' % i)
     x = 0
     a = [[] for b in range(i)]
@@ -1282,57 +1282,72 @@ def fscw(s, str2):
     print('放生成功，共放生%d只宠物' % count)
 
 
+def _prop_backto_store(s, str2, item_id, quantity):
+    """将指定数量的道具放入仓库。"""
+    item_id_bytes = item_id.to_bytes(4, byteorder='big')
+    quantity_bytes = quantity.to_bytes(4, byteorder='big')
+    packet = [0, 0, 0, 30, 4, 99, *str2, 0, 0, 5, 15, 0, 0, 0, 0, 0, 0, 0, 1, *item_id_bytes,
+              *quantity_bytes]
+    t1 = tuple(packet)
+    req = struct.pack(*('30B',), *t1)
+    s.send(req)
+    time.sleep(0.1)
+
+
+def _prop_sell(s, str2, item_id, quantity):
+    """出售指定数量的道具。"""
+    item_id_bytes = item_id.to_bytes(4, byteorder='big')
+    quantity_bytes = quantity.to_bytes(4, byteorder='big')
+    packet = [0, 0, 0, 30, 4, 88, *str2, 0, 0, 5, 115, 0, 0, 0, 0, 0, 0, 0, 1, *item_id_bytes,
+              *quantity_bytes]
+    t1 = tuple(packet)
+    req = struct.pack(*('30B',), *t1)
+    s.send(req)
+    time.sleep(0.1)
+
+
+def _equipment_sell(s, str2, item_id, instance_id):
+    """出售指定实例的装备。"""
+    packet = [0, 0, 0, 26, 4, 87, *str2, 0, 0, 5, 4, 0, 0, 0, 0, 0, 0, 0, 1, *instance_id]
+    t1 = tuple(packet)
+    req = struct.pack(*('26B',), *t1)
+    s.send(req)
+    print('代码%d装备已出售' % item_id)
+    time.sleep(0.1)
+
+
+def _equipment_discard(s, str2, item_id, instance_id):
+    """丢弃指定实例的装备。"""
+    packet = [0, 0, 0, 22, 4, 80, *str2, 0, 0, 6, 81, 0, 0, 0, 0, *instance_id]
+    t1 = tuple(packet)
+    req = struct.pack(*('22B',), *t1)
+    s.send(req)
+    print('代码%d装备已丢弃' % item_id)
+    time.sleep(0.1)
+
+
 def clearbag(s, str2):
     print('正在清理背包')
-    packet = [0, 0, 0, 18, 4, 85, *str2, 0, 0, 4, 233, 0, 0, 0, 0]
-    t1 = tuple(packet)
-    req = struct.pack(*('18B',), *t1)
-    s.send(req)
-    rec = s.recv(10000)
-    s.send(req)
-    rec1 = s.recv(10000)
-    r = tuple(rec1)
-    while r.__len__() < 22 or r[5] != 85:
-        s.send(req)
-        rec = s.recv(10000)
-        s.send(req)
-        rec1 = s.recv(10000)
-        r = tuple(rec1)
-    i = 0
-    while i < len(r) - 22:
-        inid = getinfo(r[(22 + i):(26 + i)])
+    prop_info, _ = _get_prop_bag_info(s, str2)
+    for prop in prop_info:
+        inid = prop['item_id']
         if (inid >= 310000 and inid < 320000) or (inid >= 210000 and inid <= 210011) or inid in (370000, 370002, 370005,
                                                                                                  290011, 290012, 290013,
                                                                                                  300044, 300045, 300046,
                                                                                                  300080, 200002, 180041,
                                                                                                  180042, 230012,
                                                                                                  300002):
-            packet = [0, 0, 0, 30, 4, 99, *str2, 0, 0, 5, 15, 0, 0, 0, 0, 0, 0, 0, 1, *r[(22 + i):(26 + i)], 0, 0,
-                      r[32 + i], r[33 + i]]
-            t1 = tuple(packet)
-            req = struct.pack(*('30B',), *t1)
-            s.send(req)
+            _prop_backto_store(s, str2, inid, prop['quantity'])
             print('代码%d物品已放入仓库' % inid)
-            time.sleep(0.1)
         if (inid >= 200004 and inid < 210000) or inid in (180043, 180044):
-            packet = [0, 0, 0, 30, 4, 88, *str2, 0, 0, 5, 115, 0, 0, 0, 0, 0, 0, 0, 1, *r[(22 + i):(26 + i)], 0, 0,
-                      r[32 + i], r[33 + i]]
-            t1 = tuple(packet)
-            req = struct.pack(*('30B',), *t1)
-            s.send(req)
+            _prop_sell(s, str2, inid, prop['quantity'])
             print('代码%d物品已出售' % inid)
-            time.sleep(0.1)
-        i += 12
 
     print('清理完毕')
 
 
-def getinfo(str, scale=4):
-    sum = 0
-    for x in range(scale):
-        sum += str[x] * 256 ** ((scale - 1) - x)
-
-    return sum
+def _byte_to_int(data, scale=4):
+    return int.from_bytes(data[:scale], byteorder="big")
 
 
 def _get_equipment_bag_info(s, str2):
@@ -1349,108 +1364,167 @@ def _get_equipment_bag_info(s, str2):
 
     # 登录阶段可能还留有其他响应；按包头长度拆包，直到收到完整的装备列表响应。
     recv_buffer = bytearray()
-    times = 0
-    r = None
-    while r is None:
-        rec = s.recv(10000)
-        if not rec:
+    retry_count = 0
+    equipment_response = None
+    while equipment_response is None:
+        received_data = s.recv(10000)
+        if not received_data:
             print('%s获取装备列表失败：连接已关闭' % str2)
             exit(0)
-        recv_buffer.extend(rec)
+        recv_buffer.extend(received_data)
 
         while len(recv_buffer) >= 4:
-            frame_length = int.from_bytes(recv_buffer[:4], byteorder='big')
-            if frame_length < 22:
+            packet_length = int.from_bytes(recv_buffer[:4], byteorder='big')
+            if packet_length < 22:
                 print('%s获取装备列表失败：响应包长度无效' % str2)
                 exit(0)
-            if len(recv_buffer) < frame_length:
+            if len(recv_buffer) < packet_length:
                 break
 
-            frame = bytes(recv_buffer[:frame_length])
-            del recv_buffer[:frame_length]
-            if frame[5] != 78:
+            packet = bytes(recv_buffer[:packet_length])
+            del recv_buffer[:packet_length]
+            if packet[5] != 78:
                 continue
 
-            candidate = tuple(frame)
+            candidate = tuple(packet)
             if len(candidate) < 22 + 96 * candidate[21]:
-                times += 1
-                if times > 20:
+                retry_count += 1
+                if retry_count > 20:
                     print('%s获取装备列表失败：装备数据不完整' % str2)
                     exit(0)
                 continue
-            r = candidate
+            equipment_response = candidate
             break
 
-    num = r[21]
-    # print('共有%d件装备' % num)
-    x = 0
-    a = [[] for b in range(num)]
-    b = 22
-    k = 0
-    t = 96
-    while b < r.__len__():
-        if k == t:
-            if x < num - 1:
-                x += 1
-                k = 0
-                t = 96
+    equipment_count = equipment_response[21]
+    equipment_records = [[] for _ in range(equipment_count)]
+    equipment_index = 0
+    response_offset = 22
+    record_offset = 0
+    record_length = 96
+    while response_offset < len(equipment_response):
+        if record_offset == record_length:
+            if equipment_index < equipment_count - 1:
+                equipment_index += 1
+                record_offset = 0
+                record_length = 96
             else:
                 break
-        a[x].append(int(r[b]))
-        if k == 95:
-            t = 96 + int(r[b]) * 4
-        b += 1
-        k += 1
+        equipment_records[equipment_index].append(int(equipment_response[response_offset]))
+        if record_offset == 95:
+            record_length = 96 + int(equipment_response[response_offset]) * 4
+        response_offset += 1
+        record_offset += 1
 
     equipment_info = []
-    for record in a:
+    for record in equipment_records:
         item = {
             # 记录 0:4：装备实例编号。
             'instance_id': tuple(record[0:4]),
             # 记录 4:8：装备代码（物品类型 ID）。
-            'item_id': getinfo(record[4:8]),
+            'item_id': _byte_to_int(record[4:8]),
             # 记录 16:18：装备品质代码。
-            'quality': getinfo(record[16:18], 2),
+            'quality': _byte_to_int(record[16:18], 2),
             # 记录 22:24：当前耐久度。
-            'durability': getinfo(record[22:24], 2),
+            'durability': _byte_to_int(record[22:24], 2),
             # 记录 24:26：最大耐久度。
-            'max_durability': getinfo(record[24:26], 2),
+            'max_durability': _byte_to_int(record[24:26], 2),
             # 记录 28:30：最大生命值加成。
-            'max_hp': getinfo(record[28:30], 2),
+            'max_hp': _byte_to_int(record[28:30], 2),
             # 记录 32:34：最大魔力值加成。
-            'max_mp': getinfo(record[32:34], 2),
+            'max_mp': _byte_to_int(record[32:34], 2),
             # 记录 34:36：攻击力。
-            'attack': getinfo(record[34:36], 2),
+            'attack': _byte_to_int(record[34:36], 2),
             # 记录 36:38：魔法攻击力。
-            'magic_attack': getinfo(record[36:38], 2),
+            'magic_attack': _byte_to_int(record[36:38], 2),
             # 记录 38:40：防御力。
-            'defense': getinfo(record[38:40], 2),
+            'defense': _byte_to_int(record[38:40], 2),
             # 记录 40:42：抗魔力。
-            'magic_defense': getinfo(record[40:42], 2),
+            'magic_defense': _byte_to_int(record[40:42], 2),
             # 记录 42:44：速度。
-            'speed': getinfo(record[42:44], 2),
+            'speed': _byte_to_int(record[42:44], 2),
             # 记录 44:46：精神力。
-            'spirit': getinfo(record[44:46], 2),
+            'spirit': _byte_to_int(record[44:46], 2),
             # 记录 46:48：恢复力。
-            'recovery': getinfo(record[46:48], 2),
+            'recovery': _byte_to_int(record[46:48], 2),
             # 记录 48:50：命中率。
-            'hit': getinfo(record[48:50], 2),
+            'hit': _byte_to_int(record[48:50], 2),
             # 记录 50:52：回避率。
-            'dodge': getinfo(record[50:52], 2),
+            'dodge': _byte_to_int(record[50:52], 2),
             # 记录 52:54：必杀率。
-            'critical': getinfo(record[52:54], 2),
+            'critical': _byte_to_int(record[52:54], 2),
             # 记录 54:56：反击率。
-            'counter': getinfo(record[54:56], 2),
+            'counter': _byte_to_int(record[54:56], 2),
             # 记录 90:92：宝石鉴定状态，样本中 1=未鉴定、2=已鉴定。
-            'gem_identification_status': getinfo(record[90:92], 2),
+            'gem_identification_status': _byte_to_int(record[90:92], 2),
             # 记录 95：宝石孔数量。
             'socket_count': record[95],
             # 记录 96 之后：每个宝石孔对应一个 4 字节宝石代码。
-            'gem_ids': [getinfo(record[96 + i * 4:100 + i * 4]) for i in range(record[95])],
+            'gem_ids': [_byte_to_int(record[96 + i * 4:100 + i * 4]) for i in range(record[95])],
         }
         equipment_info.append(item)
 
-    return equipment_info, num
+    return equipment_info, equipment_count
+
+
+def _get_prop_bag_info(s, str2):
+    """
+    获取并解析道具背包中的物品信息。
+    :param s: socket连接
+    :param str2: 米米号
+    :return: 结构化物品信息列表和物品数量
+    """
+    packet = [0, 0, 0, 18, 4, 85, *str2, 0, 0, 4, 233, 0, 0, 0, 0]
+    t1 = tuple(packet)
+    req = struct.pack(*('18B',), *t1)
+    s.send(req)
+
+    # 登录阶段可能还留有其他响应；按包头长度拆包，直到收到完整的道具列表响应。
+    recv_buffer = bytearray()
+    retry_count = 0
+    prop_response = None
+    while prop_response is None:
+        received_data = s.recv(10000)
+        if not received_data:
+            print('%s获取道具列表失败：连接已关闭' % str2)
+            exit(0)
+        recv_buffer.extend(received_data)
+
+        while len(recv_buffer) >= 4:
+            packet_length = int.from_bytes(recv_buffer[:4], byteorder='big')
+            if packet_length < 22:
+                print('%s获取道具列表失败：响应包长度无效' % str2)
+                exit(0)
+            if len(recv_buffer) < packet_length:
+                break
+
+            packet = bytes(recv_buffer[:packet_length])
+            del recv_buffer[:packet_length]
+            if packet[5] != 85:
+                continue
+
+            candidate = tuple(packet)
+            if len(candidate) < 22 + 12 * candidate[21]:
+                retry_count += 1
+                if retry_count > 20:
+                    print('%s获取道具列表失败：物品数据不完整' % str2)
+                    exit(0)
+                continue
+            prop_response = candidate
+            break
+
+    prop_count = prop_response[21]
+    prop_info = []
+    for prop_index in range(prop_count):
+        record_start = 22 + prop_index * 12
+        prop_info.append({
+            # 每条记录 0:4：物品代码（物品类型 ID）。
+            'item_id': _byte_to_int(prop_response[record_start:record_start + 4]),
+            # 每条记录 8:12：物品数量，按 4 字节大端整数解析。
+            'quantity': _byte_to_int(prop_response[record_start + 8:record_start + 12]),
+        })
+
+    return prop_info, prop_count
 
 
 def cleanequipment(s, str2):
@@ -1465,19 +1539,9 @@ def cleanequipment(s, str2):
                 inid >= 130001 and inid <= 130004):
             if (inid >= 130007 and inid <= 130011) or (inid >= 120001 and inid <= 120004) or (
                     inid >= 130001 and inid <= 130004):
-                packet = [0, 0, 0, 26, 4, 87, *str2, 0, 0, 5, 4, 0, 0, 0, 0, 0, 0, 0, 1, *item['instance_id']]
-                t1 = tuple(packet)
-                req = struct.pack(*('26B',), *t1)
-                s.send(req)
-                print('代码%d装备已出售' % inid)
-                time.sleep(0.1)
+                _equipment_sell(s, str2, inid, item['instance_id'])
             else:
-                packet = [0, 0, 0, 22, 4, 80, *str2, 0, 0, 6, 81, 0, 0, 0, 0, *item['instance_id']]
-                t1 = tuple(packet)
-                req = struct.pack(*('22B',), *t1)
-                s.send(req)
-                print('代码%d装备已丢弃' % inid)
-                time.sleep(0.1)
+                _equipment_discard(s, str2, inid, item['instance_id'])
 
 
 def openzybox(s, str2):
@@ -1575,33 +1639,33 @@ def openzybox(s, str2):
         expect_shoes = 0
         if zhiye == 'sy':
             for x in range(num):
-                inid = getinfo(a[x][4:8])
+                inid = _byte_to_int(a[x][4:8])
                 if inid == weapon_id:
                     weapon += 1
-                    print('您的第%d把武器攻击为%d，魔攻为%d，恢复力为%d' % (weapon, getinfo(a[x][34:36], 2),
-                                                                          getinfo(a[x][36:38], 2),
-                                                                          getinfo(a[x][46:48], 2)))
-                    if getinfo(a[x][34:36], 2) >= expect[0] and getinfo(a[x][36:38], 2) >= expect[1] and getinfo(
+                    print('您的第%d把武器攻击为%d，魔攻为%d，恢复力为%d' % (weapon, _byte_to_int(a[x][34:36], 2),
+                                                                          _byte_to_int(a[x][36:38], 2),
+                                                                          _byte_to_int(a[x][46:48], 2)))
+                    if _byte_to_int(a[x][34:36], 2) >= expect[0] and _byte_to_int(a[x][36:38], 2) >= expect[1] and _byte_to_int(
                             a[x][46:48], 2) >= expect[2]:
                         expect_weapon += 1
         elif zhiye in ['cj', 'hm']:
             for x in range(num):
-                inid = getinfo(a[x][4:8])
+                inid = _byte_to_int(a[x][4:8])
                 if inid == weapon_id:
                     weapon += 1
-                    print('您的第%d把武器攻击为%d，魔攻为%d，精神为%d' % (weapon, getinfo(a[x][34:36], 2),
-                                                                        getinfo(a[x][36:38], 2),
-                                                                        getinfo(a[x][44:46], 2)))
-                    if getinfo(a[x][34:36], 2) >= expect[0] and getinfo(a[x][36:38], 2) >= expect[1] and getinfo(
+                    print('您的第%d把武器攻击为%d，魔攻为%d，精神为%d' % (weapon, _byte_to_int(a[x][34:36], 2),
+                                                                        _byte_to_int(a[x][36:38], 2),
+                                                                        _byte_to_int(a[x][44:46], 2)))
+                    if _byte_to_int(a[x][34:36], 2) >= expect[0] and _byte_to_int(a[x][36:38], 2) >= expect[1] and _byte_to_int(
                             a[x][44:46], 2) >= expect[2]:
                         expect_weapon += 1
         elif zhiye in ['js', 'gj', 'kz', 'rz', 'ws']:
             for x in range(num):
-                inid = getinfo(a[x][4:8])
+                inid = _byte_to_int(a[x][4:8])
                 if inid == weapon_id:
                     weapon += 1
-                    print('您的第%d把武器攻击为%d' % (weapon, getinfo(a[x][34:36], 2)))
-                    if getinfo(a[x][34:36], 2) >= expect[0]:
+                    print('您的第%d把武器攻击为%d' % (weapon, _byte_to_int(a[x][34:36], 2)))
+                    if _byte_to_int(a[x][34:36], 2) >= expect[0]:
                         expect_weapon += 1
         else:
             exit(0)
@@ -1609,11 +1673,11 @@ def openzybox(s, str2):
 
         if not zhiye in ['js', 'kz']:
             for x in range(num):
-                inid = getinfo(a[x][4:8])
+                inid = _byte_to_int(a[x][4:8])
                 if inid == shoes_id[-1]:
                     shoes += 1
-                    print('您的第%d双鞋子速度为%d,防御为%d' % (shoes, getinfo(a[x][42:44], 2), getinfo(a[x][38:40], 2)))
-                    if getinfo(a[x][42:44], 2) >= expect[3] and getinfo(a[x][38:40], 2) >= expect[4]:
+                    print('您的第%d双鞋子速度为%d,防御为%d' % (shoes, _byte_to_int(a[x][42:44], 2), _byte_to_int(a[x][38:40], 2)))
+                    if _byte_to_int(a[x][42:44], 2) >= expect[3] and _byte_to_int(a[x][38:40], 2) >= expect[4]:
                         expect_shoes += 1
         print('共有%d双鞋子符合要求' % expect_shoes)
 
@@ -1621,7 +1685,7 @@ def openzybox(s, str2):
             m = int(input(['是否清理背包? 1.清理 0.退出']))
             if m == 1:
                 for x in range(num):
-                    inid = getinfo(a[x][4:8])
+                    inid = _byte_to_int(a[x][4:8])
                     if (inid in shoes_id) or (inid == weapon_id):
                         packet = [0, 0, 0, 26, 4, 87, *str2, 0, 0, 5, 4, 0, 0, 0, 0, 0, 0, 0, 1, *a[x][0:4]]
                         t1 = tuple(packet)
@@ -1635,7 +1699,7 @@ def openzybox(s, str2):
             con = input(['是否继续? 回车继续 0.退出'])
         else:
             for x in range(num):
-                inid = getinfo(a[x][4:8])
+                inid = _byte_to_int(a[x][4:8])
                 if (inid in shoes_id) or (inid == weapon_id):
                     packet = [0, 0, 0, 26, 4, 87, *str2, 0, 0, 5, 4, 0, 0, 0, 0, 0, 0, 0, 1, *a[x][0:4]]
                     t1 = tuple(packet)
@@ -1758,9 +1822,9 @@ def xd(s, str2, xz, num):
         xz = int(input('[请选择要洗点的精灵]')) - 1
 
     print('成长%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
-        a[xz][-29], getinfo(a[xz][37:39], 2), getinfo(a[xz][70:72], 2), getinfo(a[xz][39:41], 2),
-        getinfo(a[xz][76:78], 2), getinfo(a[xz][41:43], 2), getinfo(a[xz][78:80], 2), getinfo(a[xz][43:45], 2),
-        getinfo(a[xz][80:82], 2), getinfo(a[xz][45:47], 2), getinfo(a[xz][74:76], 2)))
+        a[xz][-29], _byte_to_int(a[xz][37:39], 2), _byte_to_int(a[xz][70:72], 2), _byte_to_int(a[xz][39:41], 2),
+        _byte_to_int(a[xz][76:78], 2), _byte_to_int(a[xz][41:43], 2), _byte_to_int(a[xz][78:80], 2), _byte_to_int(a[xz][43:45], 2),
+        _byte_to_int(a[xz][80:82], 2), _byte_to_int(a[xz][45:47], 2), _byte_to_int(a[xz][74:76], 2)))
 
     if num == -1:
         num = int(input('选择丸子1绿色成长2红色成长3大丸子4紫色五项5红色五项(按0退出)')) - 1
@@ -1777,8 +1841,8 @@ def xd(s, str2, xz, num):
                 cz = 0
                 return 0
     if num == 3 or num == 4 or num == 2:
-        dqwx = [getinfo(a[xz][70:72], 2), getinfo(a[xz][76:78], 2), getinfo(a[xz][78:80], 2), getinfo(a[xz][80:82], 2),
-                getinfo(a[xz][74:76], 2)]
+        dqwx = [_byte_to_int(a[xz][70:72], 2), _byte_to_int(a[xz][76:78], 2), _byte_to_int(a[xz][78:80], 2), _byte_to_int(a[xz][80:82], 2),
+                _byte_to_int(a[xz][74:76], 2)]
         if wx == [0, 0, 0, 0, 0]:
             b = input(['请输入五项'])
             wx = [int(n) for n in b.split(' ')]
@@ -1819,7 +1883,7 @@ def eatwz(s, str2, pet, num, xz):
     xd(s, str2, xz, num)
 
 
-def _fetch_item_from_home(s, str2, item_id, quantity):
+def _fetch_item_from_store(s, str2, item_id, quantity):
     '''
     从仓库中获取指定id的物品
     :param s: socket连接
@@ -1862,7 +1926,7 @@ def kd(s, str2):
     con = ''
     petcount = 0
     while con == '':
-        _fetch_item_from_home(s, str2, petid, 6)
+        _fetch_item_from_store(s, str2, petid, 6)
         packet = [0, 0, 0, 22, 4, 106, *str2, 0, 0, 5, 77, 0, 0, 0, 0, 0, *s1]
         for i in range(6):
             t1 = tuple(packet)
@@ -1916,14 +1980,14 @@ def kd(s, str2):
         for x in range(i):
             print('您的第%d个宠物是：%s,等级是%d,转生次数%d,成长值%s' % (x + 1, getname(a[x][13:31]), a[x][32], a[x][-5],
                                                                         a[x][-29]))
-            if (a[x][-29] >= expectwx[0] or expectwx[0] == 0) and getinfo(a[x][70:72], 2) >= expectwx[1] and getinfo(
+            if (a[x][-29] >= expectwx[0] or expectwx[0] == 0) and _byte_to_int(a[x][70:72], 2) >= expectwx[1] and _byte_to_int(
                     a[x][76:78], 2) >= expectwx[2] and (
-                    expectwx[3] == 0 or getinfo(a[x][78:80], 2) <= expectwx[3]) and getinfo(a[x][80:82], 2) >= expectwx[
-                4] and (expectwx[5] == 0 or getinfo(a[x][74:76], 2) <= expectwx[5]):
+                    expectwx[3] == 0 or _byte_to_int(a[x][78:80], 2) <= expectwx[3]) and _byte_to_int(a[x][80:82], 2) >= expectwx[
+                4] and (expectwx[5] == 0 or _byte_to_int(a[x][74:76], 2) <= expectwx[5]):
                 print('体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
-                    getinfo(a[x][37:39], 2), getinfo(a[x][70:72], 2), getinfo(a[x][39:41], 2), getinfo(a[x][76:78], 2),
-                    getinfo(a[x][41:43], 2), getinfo(a[x][78:80], 2), getinfo(a[x][43:45], 2), getinfo(a[x][80:82], 2),
-                    getinfo(a[x][45:47], 2), getinfo(a[x][74:76], 2)))
+                    _byte_to_int(a[x][37:39], 2), _byte_to_int(a[x][70:72], 2), _byte_to_int(a[x][39:41], 2), _byte_to_int(a[x][76:78], 2),
+                    _byte_to_int(a[x][41:43], 2), _byte_to_int(a[x][78:80], 2), _byte_to_int(a[x][43:45], 2), _byte_to_int(a[x][80:82], 2),
+                    _byte_to_int(a[x][45:47], 2), _byte_to_int(a[x][74:76], 2)))
                 print('\n\n')
                 num += 1
 
@@ -2154,7 +2218,7 @@ def exchangelb(s, str2, type, count):
         remaining_count = count
         while remaining_count > 0:
             batch_size = min(remaining_count, max_batch_size)
-            _fetch_item_from_home(s, str2, 290011, batch_size * 7)
+            _fetch_item_from_store(s, str2, 290011, batch_size * 7)
             _exchange_item(s, str2, 0x4e, 0x72, batch_size)  
             remaining_count -= batch_size
             time.sleep(0.1)               
@@ -2163,7 +2227,7 @@ def exchangelb(s, str2, type, count):
         remaining_count = count
         while remaining_count > 0:
             batch_size = min(remaining_count, max_batch_size)
-            _fetch_item_from_home(s, str2, 290011, batch_size * 28)
+            _fetch_item_from_store(s, str2, 290011, batch_size * 28)
             _exchange_item(s, str2, 0x4e, 0x72, batch_size * 4) 
             _exchange_item(s, str2, 0x27, 0x79, batch_size)  
             remaining_count -= batch_size
@@ -2173,7 +2237,7 @@ def exchangelb(s, str2, type, count):
         remaining_count = count
         while remaining_count > 0:
             batch_size = min(remaining_count, max_batch_size)
-            _fetch_item_from_home(s, str2, 290011, batch_size * 2)
+            _fetch_item_from_store(s, str2, 290011, batch_size * 2)
             _exchange_item(s, str2, 0x4e, 0x74, batch_size)
             remaining_count -= batch_size
             time.sleep(0.1) 
@@ -2186,3 +2250,4 @@ def exchangelb(s, str2, type, count):
 
 if __name__ == '__main__':
     login_interface('account.txt')
+
