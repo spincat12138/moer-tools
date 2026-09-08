@@ -1777,6 +1777,17 @@ def _reset_xd_state():
     xd_max_count = 0
 
 
+def _should_retry_xd():
+    """洗点结束后等待用户选择：回车重试，0 返回宠物列表。"""
+    while True:
+        choice = input('[按回车使用相同设置重试，按0返回]').strip()
+        if choice == '':
+            return True
+        if choice == '0':
+            return False
+        print('请直接按回车重试，或输入0返回')
+
+
 def xd_menu(s, str2):
     """洗点子菜单；每次结束后重新选择宠物，输入 0 返回主功能菜单。"""
     while not xd(s, str2, -1, -1):
@@ -1866,10 +1877,18 @@ def xd(s, str2, xz, num):
 
             if is_satisfied:
                 print('洗点成功，一共洗点%d次' % xd_count)
+                if _should_retry_xd():
+                    xd_count = 0
+                    eatwz(s, str2, pet, num)
+                    continue
                 _reset_xd_state()
                 return False
             if xd_count >= xd_max_count:
                 print('已达到指定洗点次数，一共洗点%d次' % xd_count)
+                if _should_retry_xd():
+                    xd_count = 0
+                    eatwz(s, str2, pet, num)
+                    continue
                 _reset_xd_state()
                 return False
 
