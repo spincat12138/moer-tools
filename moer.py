@@ -1,5 +1,6 @@
 from urllib import parse
-import time, struct, random, socket, hashlib, threading
+import time, struct, random, socket, hashlib, threading, weakref
+from collections import deque
 
 from uncompyle6.parsers.reducecheck import tryexcept
 
@@ -9,6 +10,94 @@ xd_count = 0
 xd_max_count = 0
 mmh = 0
 mmh_mm = 0
+
+# 与客户端 ProfessionType 中的职业编号保持一致。
+_PROFESSION_NAMES = {
+    0: '无',
+    1: '剑士',
+    2: '弓箭手',
+    3: '魔法师',
+    4: '传教士',
+    5: '忍者',
+    6: '狂战士',
+    7: '黑魔导士',
+    8: '圣言使',
+    9: '巫术士',
+}
+
+
+class SocketSession:
+    """为一条 TCP 连接维护持久化的拆包缓冲区和待处理响应。"""
+
+    _MIN_PACKET_LENGTH = 18
+    _MAX_PACKET_LENGTH = 10 * 1024 * 1024
+
+    def __init__(self, sock):
+        self.sock = sock
+        self._recv_buffer = bytearray()
+        self._pending_by_command = {}
+        self._recv_lock = threading.Lock()
+
+    def recv_packet(self, expected_command=None, timeout=None):
+        """读取一个完整网络帧；不匹配 expected_command 的帧会暂存。"""
+        with self._recv_lock:
+            pending = self._pending_by_command.get(expected_command)
+            if expected_command is not None and pending:
+                packet = pending.popleft()
+                if not pending:
+                    del self._pending_by_command[expected_command]
+                return packet
+
+            original_timeout = self.sock.gettimeout()
+            if timeout is not None:
+                self.sock.settimeout(timeout)
+            try:
+                while True:
+                    packet = self._pop_complete_packet()
+                    if packet is None:
+                        received_data = self.sock.recv(10000)
+                        if not received_data:
+                            raise ConnectionError('socket连接已关闭')
+                        self._recv_buffer.extend(received_data)
+                        continue
+
+                    command_id = int.from_bytes(packet[4:6], byteorder='big')
+                    if expected_command is None or command_id == expected_command:
+                        return packet
+                    self._pending_by_command.setdefault(command_id, deque()).append(packet)
+            finally:
+                if timeout is not None:
+                    self.sock.settimeout(original_timeout)
+
+    def _pop_complete_packet(self):
+        if len(self._recv_buffer) < 4:
+            return None
+
+        packet_length = int.from_bytes(self._recv_buffer[:4], byteorder='big')
+        if not self._MIN_PACKET_LENGTH <= packet_length <= self._MAX_PACKET_LENGTH:
+            raise ValueError('响应包长度无效（%d）' % packet_length)
+        if len(self._recv_buffer) < packet_length:
+            return None
+
+        packet = bytes(self._recv_buffer[:packet_length])
+        del self._recv_buffer[:packet_length]
+        if len(packet) < 6:
+            raise ValueError('响应包头不完整')
+        return packet
+
+
+_SOCKET_SESSIONS = weakref.WeakKeyDictionary()
+_SOCKET_SESSIONS_LOCK = threading.Lock()
+
+
+def _get_socket_session(sock):
+    """返回与 socket 绑定的会话，确保接收缓冲区不会随函数调用丢失。"""
+    with _SOCKET_SESSIONS_LOCK:
+        session = _SOCKET_SESSIONS.get(sock)
+        if session is None:
+            session = SocketSession(sock)
+            _SOCKET_SESSIONS[sock] = session
+        return session
 
 
 def login_interface(myfile='account.txt'):
@@ -157,11 +246,15 @@ def login_taomi(uid, pwd, model=1, fwq=0):
     t1 = tuple(packet)
     req = struct.pack('174B', *t1)
     s2.send(req)
+    user_info = _get_more_userinfo(s2, str2)
+    profession = _PROFESSION_NAMES.get(user_info['profession'], str(user_info['profession']))
     # packet = [0, 0, 0, 38, 3, 236, *str2, 0, 0, 6, 31, 0, 0, 0, 0, 0, 0, 43, 194, 0, 0, 0, 0, 0, 0, 2, 63, 0, 0, 0, 159, 0, 0, 0, 0]
     # t1 = tuple(packet)
     # req = (struct.pack)('38B', *t1)
     # s2.send(req)
     print('%d登录成功,当前服务器%d' % (uid, fwq))
+    print('用户名（昵称）：%s，职业：%s，等级：%s' % (
+        user_info['nick'], profession, user_info['level']))
 
     return s, s2, str2
 
@@ -211,7 +304,7 @@ def kaipai(uid, pwd, model, fwq=0):
                 position = int(input(['请输入地点：1海滩，2草木树海']))
                 battle(s2, str2, position)
             if m == 999:
-                _get_equipment_bag_info(s2, str2)
+                jiadian_test(s2, str2,[0x63, 0x22, 0x1D, 0xDE])
         s.close()
         s2.close()
         print('成功退出')
@@ -986,59 +1079,99 @@ def zgz(s, str2):
     print('炼金术之路抽奖成功')
 
 
-def getpetlist(s, str2):
+def _get_pet_bag(s, str2):
+    """请求并解析 1554（PET_GETLIST）宠物背包信息。"""
+    pet_position_dict = {
+        1: '宠物背包',
+        2: '待命',
+        3: '主战',
+        4: '辅助',
+    }
+    packet = [0, 0, 0, 18, 6, 18, *str2, 0, 0, 4, random.randint(0, 255), 0, 0, 0, 0]
+    s.send(struct.pack('18B', *packet))
+    response = _receive_bag_response(s, str2, 1554, '宠物列表')
+    offset = 18
 
-    packet = [0, 0, 0, *[0x12, 0x06, 0x12], *str2, 0, 0, 4, random.randint(0, 255), 0, 0, 0, 0]
-    req = struct.pack(*('18B',), *packet)
-    s.send(req)
-    rec = s.recv(2048)
-    r = tuple(rec)
-    times = 0
-    while r.__len__() < 22 or r[4] * 256 + r[5] != 1554:
-        s.send(req)
-        rec = s.recv(2048)
-        r = tuple(rec)
-        time.sleep(0.5)
-        if times < 20:
-            times += 1
-        else:
-            print('%s加载宠物列表失败' % str2)
-            exit(0)
+    def read(fmt):
+        nonlocal offset
+        size = struct.calcsize(fmt)
+        if offset + size > len(response):
+            raise ValueError('%s获取宠物列表失败：宠物记录被截断' % str2)
+        value = struct.unpack_from(fmt, response, offset)[0]
+        offset += size
+        return value
 
-    i = r[21]
-    x = 0
-    a = [[] for b in range(i)]
-    b = 22
-    k = 0
-    t = 999
-    while b < r.__len__():
-        if k == t:
-            if x < i - 1:
-                x += 1
-                k = 0
-                t = 999
-            else:
-                break
-        a[x].append(int(r[b]))
-        if k == 99:
-            t = 106 + int(r[b]) * 9
-        b += 1
-        k += 1
+    def read_bytes(size):
+        nonlocal offset
+        if offset + size > len(response):
+            raise ValueError('%s获取宠物列表失败：宠物记录被截断' % str2)
+        value = response[offset:offset + size]
+        offset += size
+        return value
 
-    # pet_position_dict = {
-    #     1 : "宠物背包",
-    #     2 : "待命",
-    #     3 : "主战",
-    #     4 : "辅助"
-    # }
-    #
-    #
-    # for x in range(i):
-    #     print(
-    #         f'您的第{x + 1}个宠物是：{getname(a[x][13:31])},等级是{a[x][32]},宠物所在位置为[{pet_position_dict[a[x][67]]}],转生次数{a[x][-5]},'
-    #         f'已分配经验{getexp(a[x][33:37])},转生所需经验{jsexp(a[x][-5], 0) - getexp(a[x][33:37])}')
+    pet_count = read('>I')
+    pets = []
+    for _ in range(pet_count):
+        pet_id = read('>I')
+        type_id = read('>I')
+        pet = {
+            'pet_id': pet_id,
+            'pet_id_bytes': tuple(pet_id.to_bytes(4, byteorder='big')),
+            'type_id': type_id,
+            'race': read('>B'),
+            'flag': read('>I'),
+            'nick': read_bytes(16).split(b'\x00', 1)[0].decode('utf-8', errors='replace'),
+            'level': read('>I'),
+            'experience': read('>I'),
+            'physique': read('>H'),
+            'strength': read('>H'),
+            'endurance': read('>H'),
+            'quick': read('>H'),
+            'intelligence': read('>H'),
+            'attr_point_remaid': read('>H'),
+            'attr_point_applied': read('>H'),
+            'hp': read('>I'),
+            'mp': read('>I'),
+            'earth': read('>B'),
+            'water': read('>B'),
+            'fire': read('>B'),
+            'wind': read('>B'),
+            'injury_level': read('>I'),
+            'status': pet_position_dict.get(read('>B'), '未知'),
+            'hp_max': read('>I'),
+            'mp_max': read('>I'),
+            'attack': read('>H'),
+            'defense': read('>H'),
+            'speed': read('>H'),
+            'spirit': read('>H'),
+            'resume': read('>H'),
+            'hit_rate': read('>H'),
+            'avoid_rate': read('>H'),
+            'critical': read('>H'),
+            'fight_back': read('>H'),
+            'grow_value': read('>H'),
+        }
 
-    return a, i
+        skill_count = read('>I')
+        if skill_count > (len(response) - offset - 5) // 9:
+            raise ValueError('%s获取宠物列表失败：技能数量与包长不匹配' % str2)
+        skills = []
+        for _ in range(skill_count):
+            skills.append({
+                'skill_id': read('>I'),
+                'level': max(1, read('>B')),
+                'experience': read('>I'),
+            })
+        pet['skill_count'] = skill_count
+        pet['skills'] = skills
+        pet['is_reincarnation_enable'] = bool(read('>?'))
+        pet['reincarnation_degree'] = read('>B')
+        pet['additional_growth'] = read('>I')
+        pets.append(pet)
+
+    if offset != len(response):
+        raise ValueError('%s获取宠物列表失败：包尾存在未解析数据' % str2)
+    return {'pet_count': pet_count, 'pets': pets}
 
 
 
@@ -1046,21 +1179,17 @@ def getpetlist(s, str2):
 
 def fjy(s, str2, num):
 
-    a, i = getpetlist(s,str2)
-
-    pet_position_dict = {
-        1 : "宠物背包",
-        2 : "待命",
-        3 : "主战",
-        4 : "辅助"
-    }
+    pet_data = _get_pet_bag(s, str2)
+    a = pet_data['pets']
+    i = pet_data['pet_count']
 
     if num == 0:
         for x in range(i):
+            pet = a[x]
             print(
                 f'共有{i}只宠物\n',
-                f'您的第{x + 1}个宠物是：{getname(a[x][13:31])},等级是{a[x][32]},宠物所在位置为[{pet_position_dict[a[x][67]]}],转生次数{a[x][-5]},'
-                f'已分配经验{getexp(a[x][33:37])},转生所需经验{jsexp(a[x][-5], 0) - getexp(a[x][33:37])}')
+                f"您的第{x + 1}个宠物是：{pet['nick']},等级是{pet['level']},宠物所在位置为[{pet['status']}],转生次数{pet['reincarnation_degree']},"
+                f"已分配经验{pet['experience']},转生所需经验{jsexp(pet['reincarnation_degree'], 0) - pet['experience']}")
 
     packet = [0, 0, 0, 22, 7, 208, *str2, 0, 0, 5, 179, 0, 0, 0, 0, *str2]
     req = struct.pack(*('22B',), *packet)
@@ -1080,19 +1209,20 @@ def fjy(s, str2, num):
         x = int(a2) - 1
         if x == -1:
             return
-        print('您要分配经验的宠物是%s' % getname(a[x][13:31]))
+        print('您要分配经验的宠物是%s' % a[x]['nick'])
     elif num == 1:
         b = 0
-        while b < i and a[b][-5] == 10 and a[b][32] == 99:
+        while b < i and a[b]['reincarnation_degree'] == 10 and a[b]['level'] == 99:
             b += 1
 
         if b < i:
             x = b
-        print('您要分配经验的宠物是%s' % getname(a[x][13:31]))
-    exp -= yjzs(exp, jsexp(a[x][-5], 0) - getexp(a[x][33:37]), a[x], str2, s)
-    i = a[x][-5] + 1
+        print('您要分配经验的宠物是%s' % a[x]['nick'])
+    pet = a[x]
+    exp -= yjzs(exp, jsexp(pet['reincarnation_degree'], 0) - pet['experience'], pet['pet_id_bytes'], str2, s)
+    i = pet['reincarnation_degree'] + 1
     while exp > 0 and i != 11:
-        exp -= yjzs(exp, jsexp(i, 0), a[x], str2, s)
+        exp -= yjzs(exp, jsexp(i, 0), pet['pet_id_bytes'], str2, s)
         i += 1
 
     if exp > 0:
@@ -1352,6 +1482,111 @@ def _byte_to_int(data, scale=4):
     return int.from_bytes(data[:scale], byteorder="big")
 
 
+def _receive_bag_response(s, str2, command_id, description):
+    """从 socket 中取出指定命令的一个完整网络帧。"""
+    try:
+        return _get_socket_session(s).recv_packet(expected_command=command_id)
+    except ConnectionError as exc:
+        raise ConnectionError('%s获取%s失败：连接已关闭' % (str2, description)) from exc
+    except ValueError as exc:
+        raise ValueError('%s获取%s失败：%s' % (str2, description, exc)) from exc
+
+
+def _parse_equipment_record(data, offset, str2):
+    """按 SingleItemInfo.setEquipInfo 解析一条装备记录。"""
+    def read(fmt):
+        nonlocal offset
+        size = struct.calcsize(fmt)
+        if offset + size > len(data):
+            raise ValueError('%s解析装备信息失败：装备记录被截断' % str2)
+        value = struct.unpack_from(fmt, data, offset)[0]
+        offset += size
+        return value
+
+    unique_id = read('>I')
+    good_id = read('>I')
+    grid_id = read('>I')
+    level = read('>H')
+    color_id = read('>I')
+    validday = read('>I')
+    max_durability = read('>H')
+    durability = read('>H')
+    max_hp = read('>i')
+    max_mp = read('>i')
+
+    attack = read('>h')
+    magic_attack = read('>h')
+    defense = read('>h')
+    magic_defense = read('>h')
+    speed = read('>h')
+    spirit = read('>h')
+    recovery = read('>h')
+    hit = read('>h')
+    dodge = read('>h')
+    critical = read('>h')
+    counter = read('>h')
+    resistances = [read('>h') for _ in range(6)]
+
+    crystal_attr = read('>I')
+    bless_type = read('>I')
+    activated = read('>I')
+    add_bless_value = read('>I')
+
+    gem_count = read('>I')
+    if gem_count > (len(data) - offset) // 4:
+        raise ValueError('%s解析装备信息失败：宝石数量与包长不匹配' % str2)
+    gem_ids = [read('>I') for _ in range(gem_count)]
+
+    equip_kind_identified = read('>I')
+    stone_count = read('>I')
+    if stone_count > (len(data) - offset) // 4:
+        raise ValueError('%s解析装备信息失败：镶嵌石数量与包长不匹配' % str2)
+    stone_ids = [read('>I') for _ in range(stone_count)]
+
+    return {
+        'instance_id': tuple(unique_id.to_bytes(4, byteorder='big')),
+        'item_id': good_id,
+        'grid_id': grid_id,
+        'level': level,
+        'quality': color_id,
+        'equip_color_id': color_id,
+        'validday': validday,
+        'durability': durability,
+        'max_durability': max_durability,
+        'max_hp': max_hp,
+        'max_mp': max_mp,
+        'attack': attack,
+        'magic_attack': magic_attack,
+        'defense': defense,
+        'magic_defense': magic_defense,
+        'speed': speed,
+        'spirit': spirit,
+        'recovery': recovery,
+        'hit': hit,
+        'dodge': dodge,
+        'critical': critical,
+        'counter': counter,
+        'resist_poison': resistances[0],
+        'resist_stone': resistances[1],
+        'resist_sleep': resistances[2],
+        'resist_inebriation': resistances[3],
+        'resist_confusion': resistances[4],
+        'resist_oblivion': resistances[5],
+        'crystal_attr': crystal_attr,
+        'bless_type': bless_type,
+        'activated': activated,
+        'add_bless_value': add_bless_value,
+        'gem_identification_status': equip_kind_identified,
+        'equip_kind_identified': equip_kind_identified,
+        'socket_count': gem_count,
+        'gem_count': gem_count,
+        'gem_ids': gem_ids,
+        'equip_level_identify': stone_count,
+        'stone_count': stone_count,
+        'stone_ids': stone_ids,
+    }, offset
+
+
 def _get_equipment_bag_info(s, str2):
     """
     获取并解析背包内装备信息。
@@ -1364,110 +1599,134 @@ def _get_equipment_bag_info(s, str2):
     req = struct.pack(*('18B',), *t1)
     s.send(req)
 
-    # 登录阶段可能还留有其他响应；按包头长度拆包，直到收到完整的装备列表响应。
-    recv_buffer = bytearray()
-    retry_count = 0
-    equipment_response = None
-    while equipment_response is None:
-        received_data = s.recv(10000)
-        if not received_data:
-            print('%s获取装备列表失败：连接已关闭' % str2)
-            exit(0)
-        recv_buffer.extend(received_data)
+    response = _receive_bag_response(s, str2, 1102, '装备列表')
+    offset = 18
 
-        while len(recv_buffer) >= 4:
-            packet_length = int.from_bytes(recv_buffer[:4], byteorder='big')
-            # 其他操作的响应可能只有 18 字节；只要能读取命令字节，就先拆包并跳过非装备响应。
-            if packet_length < 6:
-                print('%s获取装备列表失败：响应包长度无效' % str2)
-                exit(0)
-            if len(recv_buffer) < packet_length:
-                break
-
-            packet = bytes(recv_buffer[:packet_length])
-            del recv_buffer[:packet_length]
-            if packet[5] != 78:
-                continue
-
-            candidate = tuple(packet)
-            if len(candidate) < 22 + 96 * candidate[21]:
-                retry_count += 1
-                if retry_count > 20:
-                    print('%s获取装备列表失败：装备数据不完整' % str2)
-                    exit(0)
-                continue
-            equipment_response = candidate
-            break
-
-    equipment_count = equipment_response[21]
-    equipment_records = [[] for _ in range(equipment_count)]
-    equipment_index = 0
-    response_offset = 22
-    record_offset = 0
-    record_length = 96
-    while response_offset < len(equipment_response):
-        if record_offset == record_length:
-            if equipment_index < equipment_count - 1:
-                equipment_index += 1
-                record_offset = 0
-                record_length = 96
-            else:
-                break
-        equipment_records[equipment_index].append(int(equipment_response[response_offset]))
-        if record_offset == 95:
-            record_length = 96 + int(equipment_response[response_offset]) * 4
-        response_offset += 1
-        record_offset += 1
+    if offset + 4 > len(response):
+        raise ValueError('%s获取装备列表失败：缺少装备数量' % str2)
+    equipment_count = struct.unpack_from('>I', response, offset)[0]
+    offset += 4
+    if equipment_count > (len(response) - offset) // 96:
+        raise ValueError('%s获取装备列表失败：装备数量与包长不匹配' % str2)
 
     equipment_info = []
-    for record in equipment_records:
-        item = {
-            # 记录 0:4：装备实例编号。
-            'instance_id': tuple(record[0:4]),
-            # 记录 4:8：装备代码（物品类型 ID）。
-            'item_id': _byte_to_int(record[4:8]),
-            # 记录 16:18：装备品质代码。
-            'quality': _byte_to_int(record[16:18], 2),
-            # 记录 22:24：当前耐久度。
-            'durability': _byte_to_int(record[22:24], 2),
-            # 记录 24:26：最大耐久度。
-            'max_durability': _byte_to_int(record[24:26], 2),
-            # 记录 28:30：最大生命值加成。
-            'max_hp': _byte_to_int(record[28:30], 2),
-            # 记录 32:34：最大魔力值加成。
-            'max_mp': _byte_to_int(record[32:34], 2),
-            # 记录 34:36：攻击力。
-            'attack': _byte_to_int(record[34:36], 2),
-            # 记录 36:38：魔法攻击力。
-            'magic_attack': _byte_to_int(record[36:38], 2),
-            # 记录 38:40：防御力。
-            'defense': _byte_to_int(record[38:40], 2),
-            # 记录 40:42：抗魔力。
-            'magic_defense': _byte_to_int(record[40:42], 2),
-            # 记录 42:44：速度。
-            'speed': _byte_to_int(record[42:44], 2),
-            # 记录 44:46：精神力。
-            'spirit': _byte_to_int(record[44:46], 2),
-            # 记录 46:48：恢复力。
-            'recovery': _byte_to_int(record[46:48], 2),
-            # 记录 48:50：命中率。
-            'hit': _byte_to_int(record[48:50], 2),
-            # 记录 50:52：回避率。
-            'dodge': _byte_to_int(record[50:52], 2),
-            # 记录 52:54：必杀率。
-            'critical': _byte_to_int(record[52:54], 2),
-            # 记录 54:56：反击率。
-            'counter': _byte_to_int(record[54:56], 2),
-            # 记录 90:92：宝石鉴定状态，样本中 1=未鉴定、2=已鉴定。
-            'gem_identification_status': _byte_to_int(record[90:92], 2),
-            # 记录 95：宝石孔数量。
-            'socket_count': record[95],
-            # 记录 96 之后：每个宝石孔对应一个 4 字节宝石代码。
-            'gem_ids': [_byte_to_int(record[96 + i * 4:100 + i * 4]) for i in range(record[95])],
-        }
+    for _ in range(equipment_count):
+        item, offset = _parse_equipment_record(response, offset, str2)
         equipment_info.append(item)
 
+    if offset != len(response):
+        raise ValueError('%s获取装备列表失败：包尾存在未解析数据' % str2)
     return equipment_info, equipment_count
+
+
+def _get_more_userinfo(s, str2):
+    """请求并解析 1006（GET_MORE_USERINFO）的人物详细信息。"""
+    packet = [0, 0, 0, 22, 3, 238, *str2, 0, 0, 5, 175, 0, 0, 0, 0, *str2]
+    s.send(struct.pack('22B', *packet))
+
+    response = _receive_bag_response(s, str2, 1006, '人物信息')
+    offset = 18
+
+    def read(fmt):
+        nonlocal offset
+        size = struct.calcsize(fmt)
+        if offset + size > len(response):
+            raise ValueError('%s获取人物信息失败：响应包被截断' % str2)
+        value = struct.unpack_from(fmt, response, offset)[0]
+        offset += size
+        return value
+
+    def read_bytes(size):
+        nonlocal offset
+        if offset + size > len(response):
+            raise ValueError('%s获取人物信息失败：响应包被截断' % str2)
+        value = response[offset:offset + size]
+        offset += size
+        return value
+
+    user_id = read('>I')
+    nick = read_bytes(16).split(b'\x00', 1)[0].decode('utf-8', errors='replace')
+    fields = {
+        'user_id': user_id,
+        'nick': nick,
+        'flag': read('>I'),
+        'vip_level': read('>I'),
+        'vip_energy': read('>I'),
+        'vip_begin': read('>I'),
+        'vip_end': read('>I'),
+        'hero_cup_team_id': read('>I'),
+        'color': read('>I'),
+        'reg_time': read('>I'),
+        'race': read('>B'),
+        'profession': read('>B'),
+        'profession_phase': read('>I'),
+        'honor': read('>I'),
+        'xiaomee': read('>I'),
+        'pk_point': read('>I'),
+        'energy': read('>I'),
+        'level': read('>I'),
+        'experience': read('>I'),
+        'physique': read('>H'),
+        'strength': read('>H'),
+        'endurance': read('>H'),
+        'quick': read('>H'),
+        'intelligence': read('>H'),
+        'attr_add': read('>H'),
+        'hp': read('>I'),
+        'mp': read('>I'),
+        'earth': read('>B'),
+        'water': read('>B'),
+        'fire': read('>B'),
+        'wind': read('>B'),
+        'injured_level': read('>I'),
+        'change_body_id': read('>I'),
+        'map_id': read('>I'),
+        'map_type': read('>I'),
+        'pos_x': read('>I'),
+        'pos_y': read('>I'),
+        'base_action': read('>I'),
+        'adv_action': read('>I'),
+        'direction': read('>B'),
+        'battle_in_front': read('>B'),
+        'team_id': read('>I'),
+        'team_member_index': read('>I'),
+        'hp_max': read('>I'),
+        'mp_max': read('>I'),
+        'attack': read('>H'),
+        'defense': read('>H'),
+        'magic_defense': read('>H'),
+        'speed': read('>H'),
+        'spirit': read('>H'),
+        'restore': read('>H'),
+        'hit_rate': read('>H'),
+        'avoid_rate': read('>H'),
+        'critical': read('>H'),
+        'attack_back': read('>H'),
+        'anti_poison': read('>H'),
+        'anti_stone': read('>H'),
+        'anti_sleep': read('>H'),
+        'anti_curse': read('>H'),
+        'anti_confusion': read('>H'),
+        'anti_forget': read('>H'),
+    }
+
+    # 客户端读取并丢弃 32 字节保留区，不能把它误当成装备数量。
+    fields['reserved'] = read_bytes(32)
+    suit_item_count = read('>B')
+    if suit_item_count > (len(response) - offset) // 96:
+        raise ValueError('%s获取人物信息失败：装备数量与包长不匹配' % str2)
+
+    suit_items = []
+    for _ in range(suit_item_count):
+        item, offset = _parse_equipment_record(response, offset, str2)
+        suit_items.append(item)
+
+    if offset != len(response):
+        raise ValueError('%s获取人物信息失败：包尾存在未解析数据' % str2)
+    fields['suit_item_count'] = suit_item_count
+    fields['suit_items'] = suit_items
+    fields['detail_equip_item_list'] = suit_items
+    return fields
 
 
 def _get_prop_bag_info(s, str2):
@@ -1482,52 +1741,28 @@ def _get_prop_bag_info(s, str2):
     req = struct.pack(*('18B',), *t1)
     s.send(req)
 
-    # 登录阶段可能还留有其他响应；按包头长度拆包，直到收到完整的道具列表响应。
-    recv_buffer = bytearray()
-    retry_count = 0
-    prop_response = None
-    while prop_response is None:
-        received_data = s.recv(10000)
-        if not received_data:
-            print('%s获取道具列表失败：连接已关闭' % str2)
-            exit(0)
-        recv_buffer.extend(received_data)
+    response = _receive_bag_response(s, str2, 1109, '道具列表')
+    offset = 18
+    if len(response) - offset < 4:
+        raise ValueError('%s获取道具列表失败：缺少物品数量' % str2)
+    prop_count = struct.unpack_from('>I', response, offset)[0]
+    offset += 4
+    if prop_count > (len(response) - offset) // 12:
+        raise ValueError('%s获取道具列表失败：物品数量与包长不匹配' % str2)
 
-        while len(recv_buffer) >= 4:
-            packet_length = int.from_bytes(recv_buffer[:4], byteorder='big')
-            # 其他操作的响应可能只有 18 字节；只要能读取命令字节，就先拆包并跳过非道具响应。
-            if packet_length < 6:
-                print('%s获取道具列表失败：响应包长度无效' % str2)
-                exit(0)
-            if len(recv_buffer) < packet_length:
-                break
-
-            packet = bytes(recv_buffer[:packet_length])
-            del recv_buffer[:packet_length]
-            if packet[5] != 85:
-                continue
-
-            candidate = tuple(packet)
-            if len(candidate) < 22 + 12 * candidate[21]:
-                retry_count += 1
-                if retry_count > 20:
-                    print('%s获取道具列表失败：物品数据不完整' % str2)
-                    exit(0)
-                continue
-            prop_response = candidate
-            break
-
-    prop_count = prop_response[21]
     prop_info = []
-    for prop_index in range(prop_count):
-        record_start = 22 + prop_index * 12
+    for _ in range(prop_count):
+        good_id, grid_id, quantity = struct.unpack_from('>IIi', response, offset)
+        offset += 12
         prop_info.append({
-            # 每条记录 0:4：物品代码（物品类型 ID）。
-            'item_id': _byte_to_int(prop_response[record_start:record_start + 4]),
-            # 每条记录 8:12：物品数量，按 4 字节大端整数解析。
-            'quantity': _byte_to_int(prop_response[record_start + 8:record_start + 12]),
+            'item_id': good_id,
+            'grid_id': grid_id,
+            # setGoodInfo 使用 readInt()，客户端对负数数量按 0 处理。
+            'quantity': max(0, quantity),
         })
 
+    if offset != len(response):
+        raise ValueError('%s获取道具列表失败：包尾存在未解析数据' % str2)
     return prop_info, prop_count
 
 
@@ -1805,14 +2040,17 @@ def xd(s, str2, xz, num):
         _reset_xd_state()
 
     while True:
-        a = _load_xd_pets(s, str2)
+        pet_data = _load_xd_pets(s, str2)
+        a = pet_data['pets']
 
         if xz == -1:
-            print('共有%d只宠物' % len(a))
+            print('共有%d只宠物' % pet_data['pet_count'])
             for x in range(len(a)):
+                listed_pet = a[x]
                 print('您的第%d个宠物是：%s,等级是%d,转生次数%d,已分配经验%d,转生所需经验%d' % (
-                    x + 1, getname(a[x][13:31]), a[x][32], a[x][-5], getexp(a[x][33:37]),
-                    jsexp(a[x][-5], 0) - getexp(a[x][33:37])))
+                    x + 1, listed_pet['nick'], listed_pet['level'], listed_pet['reincarnation_degree'],
+                    listed_pet['experience'],
+                    jsexp(listed_pet['reincarnation_degree'], 0) - listed_pet['experience']))
 
             pet_number = int(input('[请选择要洗点的精灵，按0退出]'))
             if pet_number == 0:
@@ -1825,10 +2063,8 @@ def xd(s, str2, xz, num):
 
         pet = a[xz]
         print('成长%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
-            pet[-29], _byte_to_int(pet[37:39], 2), _byte_to_int(pet[70:72], 2), _byte_to_int(pet[39:41], 2),
-            _byte_to_int(pet[76:78], 2), _byte_to_int(pet[41:43], 2), _byte_to_int(pet[78:80], 2),
-            _byte_to_int(pet[43:45], 2), _byte_to_int(pet[80:82], 2), _byte_to_int(pet[45:47], 2),
-            _byte_to_int(pet[74:76], 2)))
+            pet['grow_value'], pet['physique'], pet['hp'], pet['strength'], pet['attack'],
+            pet['endurance'], pet['defense'], pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
 
         if num == -1:
             num = int(input('选择丸子1绿色成长2红色成长3大丸子4紫色五项5红色五项(按0退出)')) - 1
@@ -1839,7 +2075,7 @@ def xd(s, str2, xz, num):
         if num == 0 or num == 1:
             if cz == 0:
                 cz = int(input(['请输入目标成长']))
-            if pet[-29] >= cz:
+            if pet['grow_value'] >= cz:
                 print('洗成长成功，一共洗点%d次' % xd_count)
                 _reset_xd_state()
                 return False
@@ -1847,8 +2083,7 @@ def xd(s, str2, xz, num):
             continue
 
         if num == 3 or num == 4 or num == 2:
-            dqwx = [_byte_to_int(pet[70:72], 2), _byte_to_int(pet[76:78], 2), _byte_to_int(pet[78:80], 2),
-                    _byte_to_int(pet[80:82], 2), _byte_to_int(pet[74:76], 2)]
+            dqwx = [pet['physique'], pet['attack'], pet['defense'], pet['speed'], pet['spirit']]
 
             # 用次数是否已设置判断是否为首次进入，允许五项目标全部填写 0。
             if xd_max_count == 0:
@@ -1902,45 +2137,18 @@ def xd(s, str2, xz, num):
 
 
 def _load_xd_pets(s, str2):
-    packet = [0, 0, 0, 18, 6, 18, *str2, 0, 0, 4, 227, 0, 0, 0, 0]
-    req = struct.pack(*('18B',), *tuple(packet))
-    times = 0
-    while True:
-        s.send(req)
-        s.recv(2048)
-        s.send(req)
-        r = tuple(s.recv(2048))
-        if len(r) >= 22 and r[4] * 256 + r[5] == 1554:
-            break
-        times += 1
-        if times > 20:
-            print('%s加载宠物列表失败' % str2)
-            exit(0)
-        time.sleep(0.5)
+    """加载洗点所需的宠物数据，复用统一的宠物背包请求和解析逻辑。
 
-    pet_count = r[21]
-    pets = [[] for _ in range(pet_count)]
-    pet_index = 0
-    byte_index = 0
-    pet_length = 999
-    for value in r[22:]:
-        if byte_index == pet_length:
-            if pet_index >= pet_count - 1:
-                break
-            pet_index += 1
-            byte_index = 0
-            pet_length = 999
-        pets[pet_index].append(int(value))
-        if byte_index == 99:
-            pet_length = 106 + int(value) * 9
-        byte_index += 1
-    return pets
+    返回 ``_get_pet_bag`` 的完整结果（包含 ``pet_count`` 和结构化的
+    ``pets`` 列表），避免洗点流程再次按字节偏移解析宠物记录。
+    """
+    return _get_pet_bag(s, str2)
 
 
 def eatwz(s, str2, pet, num):
     global xd_count
     wanzi = [350013, 360008, 360038, 350014, 360009]
-    packet = [0, 0, 0, 26, 6, 34, *str2, 0, 0, 5, 172, 0, 0, 0, 0, *pet[0:4], 0, int(wanzi[num] / 65536),
+    packet = [0, 0, 0, 26, 6, 34, *str2, 0, 0, 5, 172, 0, 0, 0, 0, *pet['pet_id_bytes'], 0, int(wanzi[num] / 65536),
               int(wanzi[num] % 65536 / 256), int(wanzi[num] % 256)]
     t1 = tuple(packet)
     req = struct.pack(*('26B',), *t1)
@@ -2147,13 +2355,15 @@ def battle(s, str2, position):
     battle_times = 0
     battle_load_wait = 0.1
 
-    a, i = getpetlist(s, str2)
+    pet_data = _get_pet_bag(s, str2)
+    a = pet_data['pets']
+    i = pet_data['pet_count']
     pet_flag = False
     for x in range(i):
-        if a[x][67] == 3 :
-            pet_id = a[x][0:4]
+        if a[x]['status'] == '主战':
+            pet_id = a[x]['pet_id_bytes']
             pet_flag = True
-            print(f"找到主战宠物{getname(a[x][13:31])}")
+            print(f"找到主战宠物{a[x]['nick']}")
         else:
             pass
     if not pet_flag:
@@ -2161,6 +2371,7 @@ def battle(s, str2, position):
         print("没有主战宠物！")
 
     time.sleep(0.1)
+    skill_time = 10
 
     while True:
         try:
@@ -2212,7 +2423,7 @@ def battle(s, str2, position):
 
 
             for battle_load_percent in range(5, 101, 5):
-                # 进入战斗读秒（0-100）
+                # 进入战斗读秒（0-100） BATTLE_RES_LOAD_PROGRESS 1306
                 packet = [0, 0, 0, 22, 5, 26, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0,
                           0,
                           0, battle_load_percent]
@@ -2220,21 +2431,15 @@ def battle(s, str2, position):
                 s.send(req)
                 time.sleep(battle_load_wait)
 
-            # 不知道干啥用的，大概是进入战斗
+            # BATTLE_INIT_STATE 1317
             packet = [0, 0, 0, 22, 5, 37, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 1]
             req = struct.pack(*('22B',), *packet)
             s.send(req)
             time.sleep(0.1)
 
-            # packet = [0, 0, 0, 18, 6, 28, *str2, 0, 0, 5, 221, 0, 0, 0, 0, 0, 0, 0, 0]
-            # t1 = tuple(packet)
-            # req = (struct.pack)(*('22B', ), *t1)
-            # s.send(req)
-            # time.sleep(0.2)
-
             # 自动释放技能
             for i in range(0, skill_time):
-                # 人物自动攻击
+                # 人物自动攻击 BATTLE_ROUND_ACTION 1308
                 packet = [0, 0, 0, 38, 5, 28, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                           0,
                           255, 255, 255, 255, 0, 15, 66, 64, 0, 0, 0, 1]
@@ -2249,14 +2454,7 @@ def battle(s, str2, position):
                 s.send(req)
                 time.sleep(0.05)
 
-                # #原版有'h12064a头的包，不知道干什么用的
-                # packet = [0, 0, 0, 18, 6, 74, *str2, 0, 0, 5, random.randint(0,255), 0, 0, 0, 0]
-                # t1 = tuple(packet)
-                # req = (struct.pack)(*('18B', ), *t1)
-                # s.send(req)
-                # time.sleep(0.2)
-
-            # 大概是结束战斗（1a0406）
+            # PERSON_STATUS_CHANGE_NOTICE, 1030
             packet = [0, 0, 0, 26, 4, 6, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1]
             t1 = tuple(packet)
             req = struct.pack(*('26B',), *t1)
@@ -2313,6 +2511,20 @@ def exchangelb(s, str2, type, count):
 
     print('兑换成功')
 
+def jiadian_test(s, str2, pet_id):
+    packet = [0, 0, 0, 0x20, 0x06, 0x46, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, *pet_id, 0, 0,
+              0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    t1 = tuple(packet)
+    req = struct.pack(*('32B',), *t1)
+    for i in range(150):
+        print(f'第{i + 1}次测试')            
+        s.send(req)
+        rev = tuple(s.recv(2048))
+        print('返回结果:', rev)
+        print('-------------------------------')
+        time.sleep(0.1)
+
+    print('测试完成')
 
 if __name__ == '__main__':
     login_interface('account.txt')
