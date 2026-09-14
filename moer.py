@@ -253,7 +253,7 @@ def login_taomi(uid, pwd, model=1, fwq=0):
     # req = (struct.pack)('38B', *t1)
     # s2.send(req)
     print('%d登录成功,当前服务器%d' % (uid, fwq))
-    print('用户名（昵称）：%s，职业：%s，等级：%s' % (
+    print('昵称：%s，职业：%s，等级：%s' % (
         user_info['nick'], profession, user_info['level']))
 
     return s, s2, str2
@@ -1174,9 +1174,6 @@ def _get_pet_bag(s, str2):
     return {'pet_count': pet_count, 'pets': pets}
 
 
-
-
-
 def fjy(s, str2, num):
 
     pet_data = _get_pet_bag(s, str2)
@@ -1283,14 +1280,16 @@ def fpexp(exp, pet, uid, s):
     s1.append(int(exp / 65536))
     s1.append(int(exp / 256 % 256))
     s1.append(exp % 256)
-    packet = [0, 0, 0, 26, 4, 12, *uid, 0, 0, 5, 63, 0, 0, 0, 0, *pet[0:4], 0, *s1]
+    pet_id = pet['pet_id_bytes'] if isinstance(pet, dict) else pet[0:4]
+    packet = [0, 0, 0, 26, 4, 12, *uid, 0, 0, 5, 63, 0, 0, 0, 0, *pet_id, 0, *s1]
     t1 = tuple(packet)
     req = struct.pack(*('26B',), *t1)
     s.send(req)
 
 
 def zs(pet, uid, s):
-    packet = [0, 0, 0, 22, 15, 163, *uid, 0, 0, 5, 187, 0, 0, 0, 0, *pet[0:4]]
+    pet_id = pet['pet_id_bytes'] if isinstance(pet, dict) else pet[0:4]
+    packet = [0, 0, 0, 22, 15, 163, *uid, 0, 0, 5, 187, 0, 0, 0, 0, *pet_id]
     t1 = tuple(packet)
     req = struct.pack(*('22B',), *t1)
     s.send(req)
@@ -1829,123 +1828,69 @@ def openzybox(s, str2):
             req = struct.pack(*('22B',), *t1)
             s.send(req)
 
-        packet = [0, 0, 0, 18, 4, 78, *str2, 0, 0, 4, 201, 0, 0, 0, 0]
-        t1 = tuple(packet)
-        req = struct.pack(*('18B',), *t1)
-        s.send(req)
-        rec = s.recv(10000)
-        s.send(req)
-        rec1 = s.recv(10000)
-        r = tuple(rec1)
-        times = 0
-        while r.__len__() < 22 or r[5] != 78 or r.__len__() < 22 + 96 * r[21]:
-            s.send(req)
-            rec = s.recv(10000)
-            s.send(req)
-            rec1 = s.recv(10000)
-            r = tuple(rec1)
-            time.sleep(0.5)
-            if times < 20:
-                times += 1
-            else:
-                print('%s获取装备列表失败' % str2)
-                exit(0)
-
-        num = r[21]
-        # print('共有%d件装备' % num)
-        x = 0
-        a = [[] for b in range(num)]
-        b = 22
-        k = 0
-        t = 96
-        while b < r.__len__():
-            if k == t:
-                if x < num - 1:
-                    x += 1
-                    k = 0
-                    t = 96
-                else:
-                    break
-            a[x].append(int(r[b]))
-            if k == 95:
-                t = 96 + int(r[b]) * 4
-            b += 1
-            k += 1
+        equipment_info, num = _get_equipment_bag_info(s, str2)
 
         weapon = 0
         shoes = 0
         expect_weapon = 0
         expect_shoes = 0
         if zhiye == 'sy':
-            for x in range(num):
-                inid = _byte_to_int(a[x][4:8])
+            for item in equipment_info:
+                inid = item['item_id']
                 if inid == weapon_id:
                     weapon += 1
-                    print('您的第%d把武器攻击为%d，魔攻为%d，恢复力为%d' % (weapon, _byte_to_int(a[x][34:36], 2),
-                                                                          _byte_to_int(a[x][36:38], 2),
-                                                                          _byte_to_int(a[x][46:48], 2)))
-                    if _byte_to_int(a[x][34:36], 2) >= expect[0] and _byte_to_int(a[x][36:38], 2) >= expect[1] and _byte_to_int(
-                            a[x][46:48], 2) >= expect[2]:
+                    print('您的第%d把武器攻击为%d，魔攻为%d，恢复力为%d' % (
+                        weapon, item['attack'], item['magic_attack'], item['recovery']))
+                    if item['attack'] >= expect[0] and item['magic_attack'] >= expect[1] and item['recovery'] >= expect[2]:
                         expect_weapon += 1
         elif zhiye in ['cj', 'hm']:
-            for x in range(num):
-                inid = _byte_to_int(a[x][4:8])
+            for item in equipment_info:
+                inid = item['item_id']
                 if inid == weapon_id:
                     weapon += 1
-                    print('您的第%d把武器攻击为%d，魔攻为%d，精神为%d' % (weapon, _byte_to_int(a[x][34:36], 2),
-                                                                        _byte_to_int(a[x][36:38], 2),
-                                                                        _byte_to_int(a[x][44:46], 2)))
-                    if _byte_to_int(a[x][34:36], 2) >= expect[0] and _byte_to_int(a[x][36:38], 2) >= expect[1] and _byte_to_int(
-                            a[x][44:46], 2) >= expect[2]:
+                    print('您的第%d把武器攻击为%d，魔攻为%d，精神为%d' % (
+                        weapon, item['attack'], item['magic_attack'], item['spirit']))
+                    if item['attack'] >= expect[0] and item['magic_attack'] >= expect[1] and item['spirit'] >= expect[2]:
                         expect_weapon += 1
         elif zhiye in ['js', 'gj', 'kz', 'rz', 'ws']:
-            for x in range(num):
-                inid = _byte_to_int(a[x][4:8])
+            for item in equipment_info:
+                inid = item['item_id']
                 if inid == weapon_id:
                     weapon += 1
-                    print('您的第%d把武器攻击为%d' % (weapon, _byte_to_int(a[x][34:36], 2)))
-                    if _byte_to_int(a[x][34:36], 2) >= expect[0]:
+                    print('您的第%d把武器攻击为%d' % (weapon, item['attack']))
+                    if item['attack'] >= expect[0]:
                         expect_weapon += 1
         else:
             exit(0)
         print('共有%d件武器符合要求' % expect_weapon)
 
         if not zhiye in ['js', 'kz']:
-            for x in range(num):
-                inid = _byte_to_int(a[x][4:8])
+            for item in equipment_info:
+                inid = item['item_id']
                 if inid == shoes_id[-1]:
                     shoes += 1
-                    print('您的第%d双鞋子速度为%d,防御为%d' % (shoes, _byte_to_int(a[x][42:44], 2), _byte_to_int(a[x][38:40], 2)))
-                    if _byte_to_int(a[x][42:44], 2) >= expect[3] and _byte_to_int(a[x][38:40], 2) >= expect[4]:
+                    print('您的第%d双鞋子速度为%d,防御为%d' % (
+                        shoes, item['speed'], item['defense']))
+                    if item['speed'] >= expect[3] and item['defense'] >= expect[4]:
                         expect_shoes += 1
         print('共有%d双鞋子符合要求' % expect_shoes)
 
         if expect_weapon != 0 or expect_shoes != 0:
             m = int(input(['是否清理背包? 1.清理 0.退出']))
             if m == 1:
-                for x in range(num):
-                    inid = _byte_to_int(a[x][4:8])
+                for item in equipment_info:
+                    inid = item['item_id']
                     if (inid in shoes_id) or (inid == weapon_id):
-                        packet = [0, 0, 0, 26, 4, 87, *str2, 0, 0, 5, 4, 0, 0, 0, 0, 0, 0, 0, 1, *a[x][0:4]]
-                        t1 = tuple(packet)
-                        req = struct.pack(*('26B',), *t1)
-                        s.send(req)
-                        # print('代码%d装备已出售' % inid)
-                        time.sleep(0.1)
+                        _equipment_sell(s, str2, inid, item['instance_id'])
                 print('清理完毕')
             elif m == 0:
                 exit(0)
             con = input(['是否继续? 回车继续 0.退出'])
         else:
-            for x in range(num):
-                inid = _byte_to_int(a[x][4:8])
+            for item in equipment_info:
+                inid = item['item_id']
                 if (inid in shoes_id) or (inid == weapon_id):
-                    packet = [0, 0, 0, 26, 4, 87, *str2, 0, 0, 5, 4, 0, 0, 0, 0, 0, 0, 0, 1, *a[x][0:4]]
-                    t1 = tuple(packet)
-                    req = struct.pack(*('26B',), *t1)
-                    s.send(req)
-                    # print('代码%d装备已出售' % inid)
-                    time.sleep(0.1)
+                    _equipment_sell(s, str2, inid, item['instance_id'])
             print('清理完毕')
 
 
@@ -2063,7 +2008,7 @@ def xd(s, str2, xz, num):
 
         pet = a[xz]
         print('成长%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
-            pet['grow_value'], pet['physique'], pet['hp'], pet['strength'], pet['attack'],
+            pet['grow_value'], pet['physique'], pet['hp_max'], pet['strength'], pet['attack'],
             pet['endurance'], pet['defense'], pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
 
         if num == -1:
@@ -2208,60 +2153,21 @@ def kd(s, str2):
             s.send(req)
         petcount += 6
 
-        packet = [0, 0, 0, 18, 6, 18, *str2, 0, 0, 4, 227, 0, 0, 0, 0]
-        t1 = tuple(packet)
-        req = struct.pack(*('18B',), *t1)
-        s.send(req)
-        rec = s.recv(2048)
-        s.send(req)
-        rec1 = s.recv(2048)
-        r = tuple(rec1)
-        times = 0
-        while r.__len__() < 22 or rec1[4] * 256 + rec1[5] != 1554:
-            s.send(req)
-            rec = s.recv(2048)
-            s.send(req)
-            rec1 = s.recv(2048)
-            r = tuple(rec1)
-            time.sleep(0.5)
-            if times < 20:
-                times += 1
-            else:
-                print('%s加载宠物列表失败' % str2)
-                exit(0)
-        i = r[21]
+        pet_data = _get_pet_bag(s, str2)
+        a = pet_data['pets']
+        i = pet_data['pet_count']
         print('共有%d只宠物' % i)
-        x = 0
-        a = [[] for b in range(i)]
-        b = 22
-        k = 0
-        t = 999
-        while b < r.__len__():
-            if k == t:
-                if x < i - 1:
-                    x += 1
-                    k = 0
-                    t = 999
-                else:
-                    break
-            a[x].append(int(r[b]))
-            if k == 99:
-                t = 106 + int(r[b]) * 9
-            b += 1
-            k += 1
 
         num = 0
-        for x in range(i):
-            print('您的第%d个宠物是：%s,等级是%d,转生次数%d,成长值%s' % (x + 1, getname(a[x][13:31]), a[x][32], a[x][-5],
-                                                                        a[x][-29]))
-            if (a[x][-29] >= expectwx[0] or expectwx[0] == 0) and _byte_to_int(a[x][70:72], 2) >= expectwx[1] and _byte_to_int(
-                    a[x][76:78], 2) >= expectwx[2] and (
-                    expectwx[3] == 0 or _byte_to_int(a[x][78:80], 2) <= expectwx[3]) and _byte_to_int(a[x][80:82], 2) >= expectwx[
-                4] and (expectwx[5] == 0 or _byte_to_int(a[x][74:76], 2) <= expectwx[5]):
+        for x, pet in enumerate(a):
+            print('您的第%d个宠物是：%s,等级是%d,转生次数%d,成长值%s' % (
+                x + 1, pet['nick'], pet['level'], pet['reincarnation_degree'], pet['grow_value']))
+            if (pet['grow_value'] >= expectwx[0] or expectwx[0] == 0) and pet['hp_max'] >= expectwx[1] and pet['attack'] >= expectwx[2] and (
+                    expectwx[3] == 0 or pet['defense'] <= expectwx[3]) and pet['speed'] >= expectwx[4] and (
+                    expectwx[5] == 0 or pet['spirit'] <= expectwx[5]):
                 print('体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
-                    _byte_to_int(a[x][37:39], 2), _byte_to_int(a[x][70:72], 2), _byte_to_int(a[x][39:41], 2), _byte_to_int(a[x][76:78], 2),
-                    _byte_to_int(a[x][41:43], 2), _byte_to_int(a[x][78:80], 2), _byte_to_int(a[x][43:45], 2), _byte_to_int(a[x][80:82], 2),
-                    _byte_to_int(a[x][45:47], 2), _byte_to_int(a[x][74:76], 2)))
+                    pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],
+                    pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
                 print('\n\n')
                 num += 1
 
@@ -2289,8 +2195,8 @@ def kd(s, str2):
         else:
             clean = 0
         if clean == 1:
-            for b in range(i):
-                if a[b][32] > 1:
+            for pet in a:
+                if pet['level'] > 1:
                     print('当前背包中有等级大于1的精灵，是否继续碰蛋')
                     if int(input(['按1继续，按0退出：'])) == 0:
                         return
@@ -2299,12 +2205,12 @@ def kd(s, str2):
                 print('经验不足，是否继续。当前经验：%d' % exp)
                 if int(input(['按1继续，按0退出：'])) == 0:
                     return
-            for b in range(i):
-                fpexp(625, a[b], str2, s)
-                _pet_back_home(s, str2, a[b])
+            for b, pet in enumerate(a):
+                fpexp(625, pet, str2, s)
+                _pet_back_home(s, str2, pet)
                 if b % 2 == 1:
                     print('进行碰蛋')
-                    pengdan(a[b], a[b - 1], str2, s)
+                    pengdan(pet, a[b - 1], str2, s)
             clearbag(s, str2)
             if num > 0:
                 con = input(['是否继续开%d,回车继续,按0退出' % petid])
@@ -2319,7 +2225,8 @@ def _pet_back_home(s, str2, pet):
     :param str2: 玩家米米号
     :param pet: 宠物信息
     '''
-    packet = [0, 0, 0, 0x1a, 0x06, 0x0f, *str2, 0, 0, 5, 93, 0, 0, 0, 0, *pet[0:4], 0, 0, 0, 0]
+    pet_id = pet['pet_id_bytes'] if isinstance(pet, dict) else pet[0:4]
+    packet = [0, 0, 0, 0x1a, 0x06, 0x0f, *str2, 0, 0, 5, 93, 0, 0, 0, 0, *pet_id, 0, 0, 0, 0]
     t1 = tuple(packet)
     req = struct.pack(*('26B',), *t1)
     s.send(req)
@@ -2344,7 +2251,9 @@ def pengdan(pet1, pet2, str2, s):
     req = struct.pack(*('26B',), *t1)
     s.send(req)
     rec = s.recv(250)
-    packet = [0, 0, 0, 30, 6, 79, *str2, 0, 0, 6, 235, 0, 0, 0, 0, *pet1[0:4], *pet2[0:4], 0, 0, 0, 0]
+    pet1_id = pet1['pet_id_bytes'] if isinstance(pet1, dict) else pet1[0:4]
+    pet2_id = pet2['pet_id_bytes'] if isinstance(pet2, dict) else pet2[0:4]
+    packet = [0, 0, 0, 30, 6, 79, *str2, 0, 0, 6, 235, 0, 0, 0, 0, *pet1_id, *pet2_id, 0, 0, 0, 0]
     t1 = tuple(packet)
     req = struct.pack(*('30B',), *t1)
     s.send(req)
