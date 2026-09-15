@@ -2508,6 +2508,11 @@ def _parse_battle_over_notice(packet):
 _BATTLE_ITEM_NAMES = {
     350050: '精灵经验笔记·改',
     360039: '黑银套装大礼包',
+    360037: '重置丸春节礼包',
+    290011: '巨石碎片',
+    290012: '魔力水晶',
+    180004: '暗精魄',
+
 }
 
 
@@ -2520,7 +2525,7 @@ def _format_battle_rewards(rewards):
             totals[item_id] = totals.get(item_id, 0) + item['count']
     if not totals:
         return '无道具掉落'
-    return '，'.join('%s x%d' % (_BATTLE_ITEM_NAMES.get(item_id, '物品%d' % item_id), totals[item_id])
+    return '，'.join('%sx%d' % (_BATTLE_ITEM_NAMES.get(item_id, '物品%d' % item_id), totals[item_id])
                     for item_id in sorted(totals))
 
 
@@ -2596,13 +2601,13 @@ def battle(s, str2, position, login_socket=None):
                 packet = [0, 0, 0, 0x26, 3, 0xec, *str2, 0, 0, random.randint(5, 6),
                   random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x75, 0xfb, 0,
                   0, 0, 0, 0, 0, 0, 0x8b, 0, 0, 0x01, 0x5d, 0, 0, 0, 0]
-                s2.send(struct.pack('38B', *packet))
+                s.send(struct.pack('38B', *packet))
                 time.sleep(0.1)
 
                 # 2. 刷明雷战斗
                 packet = [0, 0, 0, 0x1a, 0x05, 0x18, *str2, 0, 0, random.randint(5, 6),
-                        random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x09, 0xc8, 0, 0, 0, 0]
-                s2.send(struct.pack('26B', *packet))
+                        random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x09, 0xc7, 0, 0, 0, 0]
+                s.send(struct.pack('26B', *packet))
                 time.sleep(0.1)
 
 
@@ -2654,12 +2659,17 @@ def battle(s, str2, position, login_socket=None):
                 # BATTLE_RES_LOAD_PROGRESS 1306：进入战斗读秒（0-100）。
                 send_packet([0, 0, 0, 22, 5, 26, *str2, 0, 0, random.randint(5, 6),
                              random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, battle_load_percent])
-                time.sleep(battle_load_wait)
+                # 新生巨石蟹的触发/读秒阶段处理较慢，过快连续发送
+                # 1306 会被服务器按异常会话复位连接。
+                time.sleep(0.5 if position == 4 else battle_load_wait)
 
             # BATTLE_INIT_STATE 1317，然后等待 BATTLE_BEGIN_NOTICE 1307。
             send_packet([0, 0, 0, 22, 5, 37, *str2, 0, 0, 5, random.randint(0, 255),
                          0, 0, 0, 0, 0, 0, 0, 1])
-            receive_until({1307})
+            # 新生巨石蟹地图的 1304/1305 触发流程较慢，服务端可能在
+            # 1317 确认后持续发送 1306/1316 十几秒才发 1307。
+            start_timeout = 30 if position == 4 else 10
+            receive_until({1307}, timeout=start_timeout)
 
             # 持续提交回合行动，直到服务器发来 1318 结算包。
             # 战斗可能在任意回合结束，不能按地点预设回合数截断。
@@ -2719,6 +2729,9 @@ def battle(s, str2, position, login_socket=None):
                          random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1])
             send_packet([0, 0, 0, 18, 5, 64, *str2, 0, 0, 5,
                          random.randint(0, 255), 0, 0, 0, 0])
+            # 等待 BATTLE_MODULE_EXIT_REPORT (1344) 确认，避免下一场
+            # 新生巨石蟹触发包紧贴上一场退出请求发送。
+            receive_until({1344}, timeout=10)
             # send_packet([0, 0, 0, 18, 6, 18, *str2, 0, 0, 5,
             #              random.randint(0, 255), 0, 0, 0, 0])
             # send_packet([0, 0, 0, 18, 4, 82, *str2, 0, 0, 5,
@@ -2741,6 +2754,13 @@ def battle(s, str2, position, login_socket=None):
             s.send(req)
             # 连续无间隔刷战斗会触发服务端连接保护；每场结束后留出
             # 一段冷却时间，避免下一场请求紧贴结算/刷新包。
+            if battle_times % 20 == 0:
+                prop_info, _ = _get_prop_bag_info(s, str2)
+                for prop in prop_info:
+                    inid = prop['item_id']
+                    if  inid in (350050,360039,360037,290011,290012,180004):
+                        _prop_backto_store(s, str2, inid, prop['quantity'])
+                        print('%s已放入仓库,共%d个' % (_BATTLE_ITEM_NAMES.get(inid, '物品%d' % inid), prop['quantity']))
             time.sleep(0.3)
         # SocketSession 在对端主动关闭时抛出 ConnectionError；与连接重置/
         # 中止一样重新登录，避免战斗循环因未捕获异常直接退出。
