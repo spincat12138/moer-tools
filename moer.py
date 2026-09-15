@@ -301,8 +301,8 @@ def kaipai(uid, pwd, model, fwq=0):
                 count = int(input(['请输入兑换数量']))
                 exchangelb(s2, str2, type, count)
             if m == 123:
-                position = int(input(['请输入地点：1海滩，2草木树海']))
-                battle(s2, str2, position)
+                position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹']))
+                battle(s2, str2, position, login_socket=s)
             if m == 999:
                 jiadian_test(s2, str2,[0x63, 0x22, 0x1D, 0xDE])
         s.close()
@@ -2259,10 +2259,276 @@ def pengdan(pet1, pet2, str2, s):
     s.send(req)
 
 
-def battle(s, str2, position):
+class _BattlePacketReader:
+    """读取战斗协议的网络帧负载（TMF 头固定 18 字节，大端序）。"""
+
+    def __init__(self, packet):
+        if len(packet) < 18:
+            raise ValueError('战斗响应包头不完整')
+        self.packet = packet
+        self.offset = 18
+
+    def read(self, fmt):
+        size = struct.calcsize(fmt)
+        if self.offset + size > len(self.packet):
+            raise ValueError('战斗响应包数据被截断（偏移%d）' % self.offset)
+        value = struct.unpack_from(fmt, self.packet, self.offset)[0]
+        self.offset += size
+        return value
+
+    def bytes(self, size):
+        if size < 0 or self.offset + size > len(self.packet):
+            raise ValueError('战斗响应包数据被截断（偏移%d）' % self.offset)
+        value = self.packet[self.offset:self.offset + size]
+        self.offset += size
+        return value
+
+    @property
+    def remaining(self):
+        return len(self.packet) - self.offset
+
+
+def _battle_avatar_id(user_id, pet_id):
+    return '%d_%d' % (user_id, pet_id)
+
+
+def _parse_battle_action_return(packet):
+    """解析 1310：fighterCount -> BattleActionInfo -> action loops。"""
+    reader = _BattlePacketReader(packet)
+    fighters = []
+    fighter_count = reader.read('>I')
+    if fighter_count > 64:
+        raise ValueError('1310 fighterCount异常：%d' % fighter_count)
+    for _ in range(fighter_count):
+        action = {
+            'seq': reader.read('>I'),
+            'user_id': reader.read('>I'),
+            'pet_id': reader.read('>I'),
+            'state1': reader.read('>I'),
+            'state2': reader.read('>I'),
+            'talk_id': reader.read('>i'),
+            'hp_change': reader.read('>i'),
+            'mp_change': reader.read('>i'),
+            'jisheng_user_id': reader.read('>I'),
+            'jisheng_pet_id': reader.read('>I'),
+            'jisheng_hp_change': reader.read('>h'),
+        }
+        action['avatar_id'] = _battle_avatar_id(action['user_id'], action['pet_id'])
+        loop_count = reader.read('>H')
+        if loop_count > 128:
+            raise ValueError('1310 loopCount异常：%d' % loop_count)
+        loops = []
+        for index in range(loop_count):
+            loop = {
+                'index': index,
+                'atk_user_id': reader.read('>I'),
+                'atk_pet_id': reader.read('>I'),
+                'rebound_state': reader.read('>B'),
+                'atk_type': reader.read('>I'),
+                'atk_level': reader.read('>B'),
+                'increase_hp': reader.read('>h'),
+                'rebound_hp': reader.read('>h'),
+                'rebound_mp': reader.read('>h'),
+                'use_item_id': reader.read('>I'),
+                'apt_user_id': reader.read('>I'),
+                'apt_pet_id': reader.read('>I'),
+                'protector_pos': reader.read('>B'),
+                'state1': reader.read('>I'),
+                'state2': reader.read('>I'),
+                'change_hp': reader.read('>h'),
+                'change_mp': reader.read('>h'),
+            }
+            loop['atk_avatar_id'] = _battle_avatar_id(loop['atk_user_id'], loop['atk_pet_id'])
+            loop['apt_avatar_id'] = _battle_avatar_id(loop['apt_user_id'], loop['apt_pet_id'])
+            loops.append(loop)
+        action['loops'] = loops
+        fighters.append(action)
+    if reader.remaining:
+        raise ValueError('1310响应存在%d字节未解析数据' % reader.remaining)
+    return fighters
+
+
+def _parse_battle_sync_info(packet):
+    """解析 1311：回合参战角色/宠物属性快照。"""
+    reader = _BattlePacketReader(packet)
+
+    def read_avatar():
+        user_id = reader.read('>I')
+        pet_id = reader.read('>I')
+        avatar = {
+            'user_id': user_id,
+            'pet_id': pet_id,
+            'pet_type_id': reader.read('>I'),
+            'position': reader.read('>I'),
+            'nick': reader.bytes(16).split(b'\x00', 1)[0].decode('utf-8', errors='replace'),
+            'vip_level': reader.read('>I'),
+            'color': reader.read('>I'),
+            'level': reader.read('>I'),
+            'hp': reader.read('>I'),
+            'hp_max': reader.read('>I'),
+            'mp': reader.read('>I'),
+            'mp_max': reader.read('>I'),
+            'health_level': reader.read('>I'),
+            'change_body_id': reader.read('>I'),
+            'auto_battle_count': reader.read('>I'),
+        }
+        invalid_count = reader.read('>I')
+        if invalid_count > 128:
+            raise ValueError('1311 invalidSkillCount异常：%d' % invalid_count)
+        avatar['invalid_skill_ids'] = [reader.read('>I') for _ in range(invalid_count)]
+        avatar['pet_state'] = reader.read('>B')
+        avatar['race'] = reader.read('>B')
+        avatar['can_catch'] = reader.read('>h') > 0
+        avatar['elements'] = {
+            'earth': reader.read('>B'),
+            'water': reader.read('>B'),
+            'fire': reader.read('>B'),
+            'wind': reader.read('>B'),
+        }
+        avatar['profession'] = reader.read('>B')
+        item_count = reader.read('>B')
+        if item_count > 64:
+            raise ValueError('1311 itemCount异常：%d' % item_count)
+        avatar['clothes'] = [
+            {'instance_id': reader.read('>I'), 'item_id': reader.read('>I'), 'level': reader.read('>H')}
+            for _ in range(item_count)
+        ]
+        skill_count = reader.read('>B')
+        if skill_count > 128:
+            raise ValueError('1311 skillCount异常：%d' % skill_count)
+        avatar['skills'] = [
+            {
+                'skill_id': reader.read('>I'),
+                'max_level': reader.read('>B'),
+                'current_level': reader.read('>B'),
+                'disable_left_round': reader.read('>B'),
+            }
+            for _ in range(skill_count)
+        ]
+        avatar['avatar_id'] = _battle_avatar_id(user_id, pet_id)
+        return avatar
+
+    result = {
+        'battle_time_stamp': reader.read('>I'),
+        'battle_user_id': reader.read('>I'),
+        'challenge_leader_id': reader.read('>I'),
+        'sneak_flag': reader.read('>B'),
+        'is_pk': reader.read('>B') == 1,
+    }
+    challenger_count = reader.read('>I')
+    if challenger_count > 32:
+        raise ValueError('1311 challengerCount异常：%d' % challenger_count)
+    result['challengers'] = [read_avatar() for _ in range(challenger_count)]
+    result['accept_leader_id'] = reader.read('>I')
+    accepter_count = reader.read('>I')
+    if accepter_count > 32:
+        raise ValueError('1311 accepterCount异常：%d' % accepter_count)
+    result['accepters'] = [read_avatar() for _ in range(accepter_count)]
+    if reader.remaining:
+        raise ValueError('1311响应存在%d字节未解析数据' % reader.remaining)
+    return result
+
+
+def _parse_battle_result_pve(packet):
+    """解析 1318：经验变化、技能变化及具体掉落物品。"""
+    reader = _BattlePacketReader(packet)
+    result = {'avatars': [], 'skills': [], 'items': [], 'is_bag_full': False}
+    avatar = {
+        'pet_id': reader.read('>I'),
+        'change_level': reader.read('>I'),
+        # BattleResultAvatarInfo.changeExp 在客户端按有符号 int 读取，
+        # 失败或扣减经验时不能截断为 0。
+        'change_exp': reader.read('>i'),
+        'protect_exp': reader.read('>I'),
+        'remain_exp': reader.read('>H'),
+    }
+    result['avatars'].append(avatar)
+    if avatar['pet_id'] == 0:
+        skill_count = reader.read('>B')
+        if skill_count > 128:
+            raise ValueError('1318 skillCount异常：%d' % skill_count)
+        result['skills'] = [
+            {'skill_id': reader.read('>I'), 'change_level': reader.read('>B'), 'change_exp': reader.read('>I')}
+            for _ in range(skill_count)
+        ]
+        result['is_bag_full'] = reader.read('>B') == 1
+        item_count = reader.read('>B')
+        if item_count > 128:
+            raise ValueError('1318 itemCount异常：%d' % item_count)
+        result['items'] = [
+            {'item_id': reader.read('>I'), 'count': reader.read('>I')}
+            for _ in range(item_count)
+        ]
+    # 部分服务器版本会在已知字段后追加协议扩展字节（长度并不固定），
+    # 客户端当前也不会读取这些字段；保留原始尾部，避免把合法响应误判为损坏。
+    result['reserved'] = reader.bytes(reader.remaining)
+    return result
+
+
+def _parse_battle_over_notice(packet):
+    """解析 1319：战斗结果、任务统计和经验倍率状态。"""
+    reader = _BattlePacketReader(packet)
+    result = {
+        'battle_type': reader.read('>I'),
+        'result': reader.read('>I'),
+        'flag': reader.read('>I'),
+        'fly_to_map_id': reader.read('>I'),
+    }
+    task_count = reader.read('>I')
+    if task_count > 128:
+        raise ValueError('1319 taskCount异常：%d' % task_count)
+    result['tasks'] = []
+    for _ in range(task_count):
+        result['tasks'].append({
+            'task_id': reader.read('>I'),
+            'node_id': reader.read('>I'),
+            'monster_type_id': reader.read('>I'),
+            'monster_count': reader.read('>H'),
+            'monster_target_count': reader.read('>H'),
+            'opponent_count': reader.read('>H'),
+            'opponent_target_count': reader.read('>H'),
+            'target_skill_used_times': reader.read('>H'),
+        })
+    result['exp_buff'] = {
+        'exp_rate': reader.read('>I'),
+        'remain_count': reader.read('>i'),
+        'skill_exp_rate': reader.read('>I'),
+        'skill_remain_count': reader.read('>i'),
+        'pet_exp_rate': reader.read('>I'),
+        'pet_remain_count': reader.read('>i'),
+        'auto_battle_count': reader.read('>i'),
+    }
+    result['auto_hp'] = reader.read('>I')
+    result['auto_mp'] = reader.read('>I')
+    if reader.remaining:
+        raise ValueError('1319响应存在%d字节未解析数据' % reader.remaining)
+    return result
+
+
+_BATTLE_ITEM_NAMES = {
+    350050: '精灵经验笔记·改',
+    360039: '黑银套装大礼包',
+}
+
+
+def _format_battle_rewards(rewards):
+    """合并多个 1318 结算包中的掉落物品并生成可读文本。"""
+    totals = {}
+    for reward in rewards:
+        for item in reward.get('items', ()):
+            item_id = item['item_id']
+            totals[item_id] = totals.get(item_id, 0) + item['count']
+    if not totals:
+        return '无道具掉落'
+    return '，'.join('%s x%d' % (_BATTLE_ITEM_NAMES.get(item_id, '物品%d' % item_id), totals[item_id])
+                    for item_id in sorted(totals))
+
+
+def battle(s, str2, position, login_socket=None):
     global mmh, mmh_mm
     battle_times = 0
     battle_load_wait = 0.1
+    reconnect_attempts = 0
 
     pet_data = _get_pet_bag(s, str2)
     a = pet_data['pets']
@@ -2280,12 +2546,10 @@ def battle(s, str2, position):
         print("没有主战宠物！")
 
     time.sleep(0.1)
-    skill_time = 10
 
     while True:
         try:
             if position == 1:
-                skill_time = 8
                 # 传送海滩
                 packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
                           *[0x56, 0x55], 0, 0, 0, 0, 0, 0, *[0x0, 0x5a], 0, 0, *[0x01, 0x8e], 0, 0, 0, 0]
@@ -2301,7 +2565,6 @@ def battle(s, str2, position):
                 time.sleep(0.1)
 
             elif position == 2:
-                skill_time = 3
                 # 草木树海
                 packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
                           *[0x2c, 0xef], 0, 0, 0, 0, 0, 0, *[0x05, 0x66], 0, 0, *[0x03, 0xee], 0, 0, 0, 0]
@@ -2316,7 +2579,6 @@ def battle(s, str2, position):
                 s.send(req)
 
             elif position == 3:
-                skill_time = 3
                 # 吉普豆3号地道
                 packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
                           *[0x54, 0xf7], 0, 0, 0, 0, 0, 0, *[0x0, 0xac], 0, 0, *[0x0, 0xcf], 0, 0, 0, 0]
@@ -2329,58 +2591,176 @@ def battle(s, str2, position):
                 req = struct.pack(*('30B',), *packet)
                 s.send(req)
                 time.sleep(0.1)
+            elif position == 4:
+                # 传送新生巨石蟹
+                packet = [0, 0, 0, 0x26, 3, 0xec, *str2, 0, 0, random.randint(5, 6),
+                  random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x75, 0xfb, 0,
+                  0, 0, 0, 0, 0, 0, 0x8b, 0, 0, 0x01, 0x5d, 0, 0, 0, 0]
+                s2.send(struct.pack('38B', *packet))
+                time.sleep(0.1)
 
+                # 2. 刷明雷战斗
+                packet = [0, 0, 0, 0x1a, 0x05, 0x18, *str2, 0, 0, random.randint(5, 6),
+                        random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x09, 0xc8, 0, 0, 0, 0]
+                s2.send(struct.pack('26B', *packet))
+                time.sleep(0.1)
+
+
+            deferred_end_packets = []
+            battle_ended = [False]
+
+            def send_packet(packet):
+                s.send(struct.pack('%dB' % len(packet), *packet))
+
+            def receive_until(commands, timeout=10):
+                """读取并解析服务器帧，直到收到指定命令集合。"""
+                pending = set(commands)
+                parsed = []
+                while pending:
+                    response = _get_socket_session(s).recv_packet(timeout=timeout)
+                    command_id = int.from_bytes(response[4:6], byteorder='big')
+                    if command_id == 1310:
+                        parsed.append((command_id, _parse_battle_action_return(response)))
+                        pending.discard(command_id)
+                    elif command_id == 1311:
+                        parsed.append((command_id, _parse_battle_sync_info(response)))
+                        pending.discard(command_id)
+                    elif command_id == 1307:
+                        parsed.append((command_id, None))
+                        pending.discard(command_id)
+                    elif command_id in pending:
+                        # 无需结构化解析的确认响应（例如 1165）。
+                        parsed.append((command_id, None))
+                        pending.discard(command_id)
+                    elif command_id in (1308, 1313, 1012):
+                        parsed.append((command_id, None))
+                    elif command_id == 1003:
+                        # LEAVE_MAP：战斗状态已被服务器清除，后续不会再有
+                        # 1310/1311；立即走外层重连流程，避免等待超时。
+                        raise ConnectionError('服务器要求离开当前地图（1003）')
+                    elif command_id in (1318, 1319):
+                        # 结算包可能紧跟最后一个回合包到达，不能放入
+                        # SocketSession 的待处理队列（recv_packet(None)
+                        # 不会主动消费该队列）。
+                        deferred_end_packets.append(response)
+                        battle_ended[0] = True
+                        pending.clear()
+                    else:
+                        # 其他响应保留给后续调用，避免无声丢包。
+                        _get_socket_session(s)._pending_by_command.setdefault(command_id, deque()).append(response)
+                return parsed
 
             for battle_load_percent in range(5, 101, 5):
-                # 进入战斗读秒（0-100） BATTLE_RES_LOAD_PROGRESS 1306
-                packet = [0, 0, 0, 22, 5, 26, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0,
-                          0,
-                          0, battle_load_percent]
-                req = struct.pack(*('22B',), *packet)
-                s.send(req)
+                # BATTLE_RES_LOAD_PROGRESS 1306：进入战斗读秒（0-100）。
+                send_packet([0, 0, 0, 22, 5, 26, *str2, 0, 0, random.randint(5, 6),
+                             random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, battle_load_percent])
                 time.sleep(battle_load_wait)
 
-            # BATTLE_INIT_STATE 1317
-            packet = [0, 0, 0, 22, 5, 37, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 1]
-            req = struct.pack(*('22B',), *packet)
-            s.send(req)
-            time.sleep(0.1)
+            # BATTLE_INIT_STATE 1317，然后等待 BATTLE_BEGIN_NOTICE 1307。
+            send_packet([0, 0, 0, 22, 5, 37, *str2, 0, 0, 5, random.randint(0, 255),
+                         0, 0, 0, 0, 0, 0, 0, 1])
+            receive_until({1307})
 
-            # 自动释放技能
-            for i in range(0, skill_time):
-                # 人物自动攻击 BATTLE_ROUND_ACTION 1308
-                packet = [0, 0, 0, 38, 5, 28, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0,
-                          255, 255, 255, 255, 0, 15, 66, 64, 0, 0, 0, 1]
-                req = struct.pack(*('38B',), *packet)
-                s.send(req)
+            # 持续提交回合行动，直到服务器发来 1318 结算包。
+            # 战斗可能在任意回合结束，不能按地点预设回合数截断。
+            round_count = 0
+            while not battle_ended[0]:
+                round_count += 1
+                send_packet([0, 0, 0, 38, 5, 28, *str2, 0, 0, 5, random.randint(0, 255),
+                             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                             255, 255, 255, 255, 0, 15, 66, 64, 0, 0, 0, 1])
+                time.sleep(0.05)
+                send_packet([0, 0, 0, 38, 5, 28, *str2, 0, 0, 5, random.randint(0, 255),
+                             0, 0, 0, 0, *pet_id, 0, 0, 0, 0, 255, 255, 255, 255,
+                             0, 15, 66, 64, 0, 0, 0, 1])
+                time.sleep(0.05)
+                # SET_ROLE_FLAG 1012：通知服务器本回合行动已提交。
+                send_packet([0, 0, 0, 26, 3, 244, *str2, 0, 0, 5, random.randint(0, 255),
+                             0, 0, 0, 0, 0, 0, 0, 0x20, 0, 0, 0, 0])
+                receive_until({1310, 1311})
+                if battle_ended[0]:
+                    break
+                # 下一回合不要紧贴上一回合响应发送，给服务端完成回合
+                # 状态切换的时间；战斗过程记录中动作间隔约为 50ms。
                 time.sleep(0.05)
 
-                # 宠物自动攻击
-                packet = [0, 0, 0, 38, 5, 28, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, *pet_id, 0, 0,
-                          0, 0, 255, 255, 255, 255, 0, 15, 66, 64, 0, 0, 0, 1]
-                req = struct.pack(*('38B',), *packet)
-                s.send(req)
-                time.sleep(0.05)
+            # 1318 可能按掉落条目重复返回；1319 才是战斗结束通知。
+            rewards = []
+            while True:
+                if deferred_end_packets:
+                    response = deferred_end_packets.pop(0)
+                else:
+                    response = _get_socket_session(s).recv_packet(timeout=10)
+                command_id = int.from_bytes(response[4:6], byteorder='big')
+                if command_id == 1318:
+                    rewards.append(_parse_battle_result_pve(response))
+                elif command_id == 1319:
+                    over = _parse_battle_over_notice(response)
+                    battle_result = over['result']
+                    reward_text = _format_battle_rewards(rewards)
+                    break
+                elif command_id == 1310:
+                    _parse_battle_action_return(response)
+                elif command_id == 1311:
+                    _parse_battle_sync_info(response)
+                else:
+                    _get_socket_session(s)._pending_by_command.setdefault(command_id, deque()).append(response)
 
-            # PERSON_STATUS_CHANGE_NOTICE, 1030
-            packet = [0, 0, 0, 26, 4, 6, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1]
-            t1 = tuple(packet)
-            req = struct.pack(*('26B',), *t1)
-            s.send(req)
-            time.sleep(0.1)
+            # 提交战斗任务进度（TASK_SUBMIT_BUFFER 1165），并确认服务器已接收。
+            task_packet = [0, 0, 0, 154, 4, 141, *str2, 0, 0, 6,
+                           random.randint(0, 255)] + [0] * 140
+            task_packet[20:24] = [0x98, 0x5B, 0x03, 0x0B]
+            task_packet[71:75] = [0x0C, 0xFA, 0x00, 0x01]
+            send_packet(task_packet)
+            receive_until({1165})
 
+            # 战斗退出及角色/背包刷新请求。对应响应暂按需求忽略。
+            send_packet([0, 0, 0, 26, 4, 6, *str2, 0, 0, 5,
+                         random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1])
+            send_packet([0, 0, 0, 18, 5, 64, *str2, 0, 0, 5,
+                         random.randint(0, 255), 0, 0, 0, 0])
+            # send_packet([0, 0, 0, 18, 6, 18, *str2, 0, 0, 5,
+            #              random.randint(0, 255), 0, 0, 0, 0])
+            # send_packet([0, 0, 0, 18, 4, 82, *str2, 0, 0, 5,
+            #              random.randint(0, 255), 0, 0, 0, 0])
+            # send_packet([0, 0, 0, 22, 3, 238, *str2, 0, 0, 5,
+            #              random.randint(0, 255), 0, 0, 0, 0, *str2])
+
+            if battle_result == 1:
+                battle_times += 1
+                print('%s:战斗结束，累计完成%d次战斗，共%d回合，获得战利品%s' %
+                      (time.strftime('%H:%M:%S'), battle_times, round_count, reward_text))
+            elif battle_result == 2:
+                print('%s:战斗失败，共%d回合' % (time.strftime('%H:%M:%S'), round_count))
+            else:
+                print('%s:战斗结果%d' % (time.strftime('%H:%M:%S'), battle_result))
+            reconnect_attempts = 0
             # 星豆治疗
             packet = [0, 0, 0, 22, 4, 1, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 5]
             req = struct.pack(*('22B',), *packet)
             s.send(req)
-
-            battle_times = battle_times + 1
-            print(time.strftime('%H:%M:%S ') + f"完成第{battle_times}次战斗")
-
-            time.sleep(0.1)
-        except (ConnectionAbortedError, ConnectionResetError):
-            _, s, str2 = login_taomi(mmh, mmh_mm, model=1, fwq=0)
+            # 连续无间隔刷战斗会触发服务端连接保护；每场结束后留出
+            # 一段冷却时间，避免下一场请求紧贴结算/刷新包。
+            time.sleep(0.3)
+        # SocketSession 在对端主动关闭时抛出 ConnectionError；与连接重置/
+        # 中止一样重新登录，避免战斗循环因未捕获异常直接退出。
+        except (ConnectionError, TimeoutError) as exc:
+            reconnect_attempts += 1
+            delay = min(60, 5 * (2 ** min(reconnect_attempts - 1, 3)))
+            print('战斗连接异常：%s，%d秒后重新登录（第%d次）' %
+                  (exc, delay, reconnect_attempts))
+            for stale_socket in (s, login_socket):
+                if stale_socket is None:
+                    continue
+                try:
+                    stale_socket.close()
+                except OSError:
+                    pass
+            time.sleep(delay)
+            login_result = login_taomi(mmh, mmh_mm, model=1, fwq=0)
+            if login_result is None:
+                raise ConnectionError('战斗重连登录失败') from exc
+            login_socket, s, str2 = login_result
 
 def exchangelb(s, str2, type, count):
     if count <= 0:
