@@ -2512,6 +2512,8 @@ _BATTLE_ITEM_NAMES = {
     290011: '巨石碎片',
     290012: '魔力水晶',
     180004: '暗精魄',
+    341007: '寂灭骨龙变身卡',
+    341011: '怪盗魔力潘变身卡',
 
 }
 
@@ -2532,7 +2534,7 @@ def _format_battle_rewards(rewards):
 def battle(s, str2, position, login_socket=None):
     global mmh, mmh_mm
     battle_times = 0
-    battle_load_wait = 0.1
+    battle_load_wait = 0.05
     reconnect_attempts = 0
 
     pet_data = _get_pet_bag(s, str2)
@@ -2655,13 +2657,13 @@ def battle(s, str2, position, login_socket=None):
                         _get_socket_session(s)._pending_by_command.setdefault(command_id, deque()).append(response)
                 return parsed
 
-            for battle_load_percent in range(5, 101, 5):
+            for battle_load_percent in range(10, 101, 10):
                 # BATTLE_RES_LOAD_PROGRESS 1306：进入战斗读秒（0-100）。
                 send_packet([0, 0, 0, 22, 5, 26, *str2, 0, 0, random.randint(5, 6),
                              random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, battle_load_percent])
                 # 新生巨石蟹的触发/读秒阶段处理较慢，过快连续发送
                 # 1306 会被服务器按异常会话复位连接。
-                time.sleep(0.5 if position == 4 else battle_load_wait)
+                time.sleep(0.3 if position == 4 else battle_load_wait)
 
             # BATTLE_INIT_STATE 1317，然后等待 BATTLE_BEGIN_NOTICE 1307。
             send_packet([0, 0, 0, 22, 5, 37, *str2, 0, 0, 5, random.randint(0, 255),
@@ -2758,10 +2760,10 @@ def battle(s, str2, position, login_socket=None):
                 prop_info, _ = _get_prop_bag_info(s, str2)
                 for prop in prop_info:
                     inid = prop['item_id']
-                    if  inid in (350050,360039,360037,290011,290012,180004):
+                    if  inid in _BATTLE_ITEM_NAMES:
                         _prop_backto_store(s, str2, inid, prop['quantity'])
                         print('%s已放入仓库,共%d个' % (_BATTLE_ITEM_NAMES.get(inid, '物品%d' % inid), prop['quantity']))
-            time.sleep(0.3)
+            time.sleep(1)
         # SocketSession 在对端主动关闭时抛出 ConnectionError；与连接重置/
         # 中止一样重新登录，避免战斗循环因未捕获异常直接退出。
         except (ConnectionError, TimeoutError) as exc:
