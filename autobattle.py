@@ -71,7 +71,8 @@ def run_battle():
         return
 
     s, s2, str2 = login_result
-    battle(s2, str2, position=position, login_socket=s)
+    battle(s2, str2, position=position, login_socket=s,
+           reconnect_uid=uid, reconnect_pwd=pwd_md5)
 
 
 if __name__ == '__main__':
