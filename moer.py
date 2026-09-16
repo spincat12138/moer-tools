@@ -125,37 +125,53 @@ def login_interface(myfile='account.txt'):
                     fwq = int(input(['请输入服务器']))
                     kaipai(mmh, mmh_mm, 1, fwq)
                 else:
-                    exit(0)
+                    return
             elif i > account_len:
                 print('?')
             else:
-                exit(0)
+                return
         if md == 2:
             print('正在一键砸罐子')
+            threads = []
             for x in range(account_len):
                 try:
-                    threading.Thread(target=kaipai, args=(int(mmh_list[x - 1]), account[mmh_list[x - 1]], 2)).start()
-                    # kaipai(int(mmh_list[x - 1]), account[mmh_list[x - 1]], 2)
+                    thread = threading.Thread(
+                        target=kaipai,
+                        args=(int(mmh_list[x]), account[mmh_list[x]], 2),
+                    )
+                    thread.start()
+                    threads.append(thread)
                 except Exception as e:
                     try:
-                        print('%d砸罐子失败' % int(mmh_list[x - 1]))
+                        print('%d砸罐子失败：%s' % (int(mmh_list[x]), e))
                     finally:
                         e = None
                         del e
-        if md == 3:
+            for thread in threads:
+                thread.join()
+            return
+        elif md == 3:
             print('正在一键分经验')
+            threads = []
             for x in range(account_len):
                 try:
-                    # kaipai(int(mmh_list[x - 1]), account[mmh_list[x - 1]], 3)
-                    threading.Thread(target=kaipai, args=(int(mmh_list[x - 1]), account[mmh_list[x - 1]], 3)).start()
+                    thread = threading.Thread(
+                        target=kaipai,
+                        args=(int(mmh_list[x]), account[mmh_list[x]], 3),
+                    )
+                    thread.start()
+                    threads.append(thread)
                 except Exception as e:
                     try:
-                        print('%d分经验失败' % int(mmh_list[x - 1]))
+                        print('%d分经验失败：%s' % (int(mmh_list[x]), e))
                     finally:
                         e = None
                         del e
+            for thread in threads:
+                thread.join()
+            return
         else:
-            exit(1)
+            return
 
 
 def get_account(myfile='account.txt'):
@@ -1075,7 +1091,7 @@ def zgz(s, str2):
         req = struct.pack(*('18B',), *t1)
         s.send(req)
     print('炼金术之路抽奖成功')
-    
+
     time.sleep(1)
     clearbag(s, str2)
     time.sleep(1)
@@ -1370,7 +1386,7 @@ def fscw(s, str2):
             times += 1
         else:
             print('%s获取宠物仓库列表失败' % str2)
-            exit(0)
+            return
 
     # packet = [0, 0, 0, 18, 6, 18, *str2, 0, 0, 6, 83, 0, 0, 0, 0]
     # t1 = tuple(packet)
@@ -1864,7 +1880,7 @@ def openzybox(s, str2):
                     if item['attack'] >= expect[0]:
                         expect_weapon += 1
         else:
-            exit(0)
+            return
         print('共有%d件武器符合要求' % expect_weapon)
 
         if not zhiye in ['js', 'kz']:
@@ -1887,7 +1903,7 @@ def openzybox(s, str2):
                         _equipment_sell(s, str2, inid, item['instance_id'])
                 print('清理完毕')
             elif m == 0:
-                exit(0)
+                return
             con = input(['是否继续? 回车继续 0.退出'])
         else:
             for item in equipment_info:
@@ -2618,10 +2634,7 @@ def _trigger_hidden_monster(s, str2, walk_packets=None, timeout=10,
     reset step > 0（RoleModel.onRoleLocationUpdate 读取本地 walkStepIdx），
     不要求服务器再回送一条自己的 1009。
     """
-    if map_id != _HIDDEN_MONSTER_MAP_ID:
-        raise ValueError('隐形怪入口要求地图 21102，收到 map_id=%d' % map_id)
-    # 这里保留实测客户端使用的入口包。它的地图字段是 54 f7，
-    # 不等同于逻辑地图编号 21102；服务端会按该入口包初始化暗雷地图。
+    
     teleport = [0, 0, 0, 0x26, 0x03, 0xec, *str2, 0, 0, 5,
                 random.randint(0, 255), 0, 0, 0, 0, 0, 0,
                 0x54, 0xf7, 0, 0, 0, 0, 0, 0,
