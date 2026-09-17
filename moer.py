@@ -225,20 +225,21 @@ def login_taomi(uid, pwd, model=1, fwq=0):
         print('登陆失败')
         return
     t = rec[22:38]
-    packet = [0, 0, 0, 162, 0, 107, *str2, 0, 0, 0, 2, 0, 0, 0, 0]
-    packet += t
-    packet = packet + [110, 111, 110, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0]
-    t1 = tuple(packet)
-    req = struct.pack('162B', *t1)
-    s.send(req)
-    rec = s.recv(2048)
+    # # CREATE_ROLE 107 可忽略
+    # packet = [0, 0, 0, 162, 0, 107, *str2, 0, 0, 0, 2, 0, 0, 0, 0]
+    # packet += t
+    # packet = packet + [110, 111, 110, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    #                    0, 0]
+    # t1 = tuple(packet)
+    # req = struct.pack('162B', *t1)
+    # s.send(req)
+    # rec = s.recv(2048)
     packet2 = [0, 0, 0, 38, 0, 105, *str2, 0, 0, 0, 1, 0, 0, 0, 0]
     packet2 += t
     packet2 = packet2 + [0, 0, 0, 0]
@@ -248,20 +249,40 @@ def login_taomi(uid, pwd, model=1, fwq=0):
     rec = s.recv(2048)
 
     fwq = fwq if model == 1 and fwq != 0 else random.randint(11, 20)
-    s2.connect(('49.234.206.24', 18080))
-    packet = [0, 0, 0, 174, 3, 233, *str2, 0, 0, 0, 184, 0, 0, 0, 0, 0, 0, 0, fwq]
-    packet += t
-    packet = packet + [0, 0, 0, 7, 0, 0, 0, 7, 110, 111, 110, 101, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    t1 = tuple(packet)
-    req = struct.pack('174B', *t1)
-    s2.send(req)
+    if fwq in range(11, 21):
+        s2.connect(('49.234.206.24', 18080))
+        packet = [0, 0, 0, 174, 3, 233, *str2, 0, 0, 0, 184, 0, 0, 0, 0, 0, 0, 0, fwq]
+        packet += t
+        packet = packet + [0, 0, 0, 7, 0, 0, 0, 7, 110, 111, 110, 101, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        t1 = tuple(packet)
+        req = struct.pack('174B', *t1)
+        s2.send(req)
+    elif fwq in range(1, 11):
+        s2.connect(('49.234.206.24', 28080))
+        packet = [0, 0, 0, 174, 3, 233, *str2, 0, 0, 0, 184, 0, 0, 0, 0, 0, 0, 0, fwq]
+        packet += t
+        packet = packet + [0, 0, 0, 7, 0, 0, 0, 7, 110, 111, 110, 101, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        t1 = tuple(packet)
+        req = struct.pack('174B', *t1)
+        s2.send(req)
+    else:
+        print('服务器选择错误')
+        return
+
     user_info = _get_more_userinfo(s2, str2)
     profession = _PROFESSION_NAMES.get(user_info['profession'], str(user_info['profession']))
     # packet = [0, 0, 0, 38, 3, 236, *str2, 0, 0, 6, 31, 0, 0, 0, 0, 0, 0, 43, 194, 0, 0, 0, 0, 0, 0, 2, 63, 0, 0, 0, 159, 0, 0, 0, 0]
@@ -317,10 +338,8 @@ def kaipai(uid, pwd, model, fwq=0):
                 count = int(input(['请输入兑换数量']))
                 exchangelb(s2, str2, type, count)
             if m == 123:
-                position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹，5隐形怪21102']))
+                position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹']))
                 battle(s2, str2, position, login_socket=s)
-            if m == 999:
-                jiadian_test(s2, str2,[0x63, 0x22, 0x1D, 0xDE])
         s.close()
         s2.close()
         print('成功退出')
@@ -2525,15 +2544,25 @@ def _parse_battle_over_notice(packet):
 
 
 _BATTLE_ITEM_NAMES = {
+    180004: '暗精魄',
+    180007: '暗精魄',
+    180057: '吉普花朵',
+    180058: '吉普草叶',
+    210003: '3级生命之息',
+    230003: 'M2曲奇',
+    240001: '风晶碎片',
+    240002: '地晶碎片',
+    240003: '水晶碎片',
+    240004: '火晶碎片',
+    290011: '巨石碎片',
+    290012: '魔力水晶',
+    340001: '吉普豆叶变身卡',
+    340002: '吉普豆花变身卡',
+    341007: '寂灭骨龙变身卡',
+    341011: '怪盗魔力潘变身卡',
     350050: '精灵经验笔记·改',
     360039: '黑银套装大礼包',
     360037: '重置丸春节礼包',
-    290011: '巨石碎片',
-    290012: '魔力水晶',
-    180004: '暗精魄',
-    341007: '寂灭骨龙变身卡',
-    341011: '怪盗魔力潘变身卡',
-
 }
 
 
@@ -2637,158 +2666,6 @@ def _parse_hidden_spawn_from_enter_map(packet):
     return pos_x, pos_y
 
 
-def _trigger_hidden_monster(s, str2, walk_packets=None, timeout=10,
-                            map_id=_HIDDEN_MONSTER_MAP_ID, trace=False):
-    """进入 21102 后，按行走回包触发一次隐形怪战斗。
-
-    返回触发时的行走信息。客户端的真实触发条件是 1034 中的
-    reset step > 0（RoleModel.onRoleLocationUpdate 读取本地 walkStepIdx），
-    不要求服务器再回送一条自己的 1009。
-    """
-    return _trigger_hidden_monster_simple(
-        s, str2, timeout=timeout, map_id=map_id, trace=trace)
-
-    # 旧版的防御性进图/动态坐标流程保留在下方，便于对照历史抓包；
-    # 实际入口统一走上面的抓包流程。
-    
-    teleport = [0, 0, 0, 0x26, 0x03, 0xec, *str2, 0, 0, 5,
-                random.randint(0, 255), 0, 0, 0, 0, 0, 0,
-                0x54, 0xf7, 0, 0, 0, 0, 0, 0,
-                0, 0xac, 0, 0, 0, 0xcf, 0, 0, 0, 0]
-    s.send(struct.pack('38B', *teleport))
-    _trace_hidden_event(trace, 'send 1004 ENTER_MAP', teleport,
-                        logical_map=map_id, entry_hex='0x54F7')
-    session = _get_socket_session(s)
-
-    # 客户端 MapManager.onEnterTargerMap 先消费完整的 1004 进场景包，
-    # 应用地图/角色状态；短的 1004 确认包不是进场景完成通知，继续等待。
-    enter_deadline = time.monotonic() + max(3.0, min(float(timeout), 30.0))
-    enter_map_packet = None
-    spawn = None
-    while time.monotonic() < enter_deadline:
-        try:
-            response = session.recv_packet(
-                expected_command=1004,
-                timeout=max(0.1, enter_deadline - time.monotonic()))
-        except socket.timeout:
-            break
-        _trace_hidden_event(trace, 'recv 1004 ENTER_MAP', response)
-        if len(response) > 18:
-            candidate_spawn = _parse_hidden_spawn_from_enter_map(response)
-            if candidate_spawn is None:
-                _trace_hidden_event(trace, 'recv 1004 NON_TARGET_MAP', response)
-                continue
-            enter_map_packet = response
-            spawn = candidate_spawn
-            _trace_hidden_event(trace, 'parsed spawn position', pos=spawn)
-            break
-        _trace_hidden_event(trace, 'recv 1004 ACK_ONLY', response)
-    if enter_map_packet is None:
-        raise TimeoutError('21102 未收到完整 1004 进场景响应，未发送 1009')
-
-    # 给客户端应用地图和角色初始状态留出一个短间隔。
-    time.sleep(0.1)
-    # 地图切换完成后通常还会有一个短 1004 确认和 1038 时间通知；
-    # 等待这批通知可避免第一条 1009 被旧地图状态按 step=0 处理。
-    ready_deadline = time.monotonic() + 2.0
-    while time.monotonic() < ready_deadline:
-        try:
-            response = session.recv_packet(
-                timeout=max(0.1, ready_deadline - time.monotonic()))
-        except socket.timeout:
-            break
-        command_id = int.from_bytes(response[4:6], 'big')
-        _trace_hidden_event(trace, 'recv map-ready command', response,
-                            command=command_id)
-        if command_id == 1004 and len(response) == 18:
-            break
-        session._pending_by_command.setdefault(command_id, deque()).append(response)
-    # 1034 是第一条 1009 的响应，不是传送完成通知；必须先按抓包
-    # 路线发送 1009，再读取 1034。
-
-    if walk_packets is None:
-        # 起点使用本次 1004 回包中的出生坐标；如果服务端响应格式
-        # 不含该字段，才退回两个已知出生点逐一尝试。
-        current_x, current_y = spawn if spawn else (646, 931)
-        target_x, target_y, direction = (
-            (646, 931, 2) if (current_x, current_y) == (1231, 737)
-            else (1231, 737, 1))
-        walk_packets = [
-            _build_walk_packet(str2, current_x, current_y,
-                               target_x, target_y, direction=direction),
-            _build_walk_packet(str2, current_x, current_y,
-                               646, 931, direction=2),
-        ]
-
-    self_id = int.from_bytes(bytes(str2), 'big')
-    last_walk = None
-
-    for walk_index, packet in enumerate(walk_packets, 1):
-        if isinstance(packet, str):
-            raw_packet = bytes.fromhex(packet)
-        elif isinstance(packet, (bytes, bytearray)):
-            raw_packet = bytes(packet)
-        else:
-            raise TypeError('walk_packets 必须是 bytes 或十六进制字符串列表')
-        if len(raw_packet) < 18 or int.from_bytes(raw_packet[4:6], 'big') != 1009:
-            raise ValueError('walk_packets 中存在非 1009 数据包')
-        s.send(raw_packet)
-        _trace_hidden_event(trace, 'send 1009 WALK', raw_packet)
-
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            remaining = max(0.1, deadline - time.monotonic())
-            try:
-                response = session.recv_packet(timeout=remaining)
-            except socket.timeout:
-                _trace_hidden_event(trace, 'timeout waiting 1009',
-                                     walk_index=walk_index)
-                break
-            command_id = int.from_bytes(response[4:6], 'big')
-            if command_id != 1009:
-                if command_id == 1034 and len(response) >= 18 + 20:
-                    reset_step, start_x, start_y, pos_x, pos_y = struct.unpack_from(
-                        '>IIIII', response, 18)
-                    _trace_hidden_event(
-                        trace, 'recv 1034 RESET_WALK_INFO', response,
-                        step=reset_step, start=(start_x, start_y), pos=(pos_x, pos_y))
-                    # 这是客户端实际的遇怪触发点：1034 更新本地
-                    # walkStepIdx 后，RoleModel 下一帧直接发 1300。
-                    if reset_step > 0:
-                        invite = _build_hidden_monster_invite(str2)
-                        s.send(invite)
-                        _trace_hidden_event(
-                            trace, 'send 1300 BATTLE_INVITE', invite,
-                            trigger='1034.step>0', step=reset_step)
-                        return {
-                            'pos_x': pos_x, 'pos_y': pos_y,
-                            'step': reset_step, 'direction': 0, 'type': 0,
-                        }
-                else:
-                    _trace_hidden_event(trace, 'recv command', response, command=command_id)
-                # 不丢弃战斗/地图初始化回包，交给后续按命令读取的流程。
-                session._pending_by_command.setdefault(command_id, deque()).append(response)
-                continue
-            walk = _parse_player_walk_packet(response, self_id)
-            if walk is None:
-                _trace_hidden_event(trace, 'recv 1009 OTHER_PLAYER', response)
-                continue
-            last_walk = walk
-            _trace_hidden_event(
-                trace, 'recv 1009 SELF', response,
-                step=walk['step'], pos=(walk['pos_x'], walk['pos_y']),
-                direction=walk['direction'], type=walk['type'])
-            # RoleModel.onRoleLocationUpdate 的唯一触发条件：walkStepIdx > 0。
-            if walk['step'] <= 0:
-                break
-            invite = _build_hidden_monster_invite(str2)
-            s.send(invite)
-            _trace_hidden_event(trace, 'send 1300 BATTLE_INVITE', invite)
-            return walk
-
-    raise TimeoutError('21102 行走回包未得到正 step，未发送 1300')
-
-
 # 21102 客户端抓包中的行走序列。walk_step 是客户端本地
 # WalkModule 的剩余步数，不是服务器 1009 回包里的 step 字段。
 _HIDDEN_CAPTURE_WALKS = (
@@ -2802,21 +2679,25 @@ _HIDDEN_CAPTURE_WALKS = (
     (1240, 761, 1240, 761, 13, 5, 1),
 )
 
-_HIDDEN_WALK_INTERVAL = 1
+_HIDDEN_WALK_INTERVAL = 0.5
 _HIDDEN_BATTLE_ATTEMPTS = 10
 
 
-def _trigger_hidden_monster_simple(s, str2, timeout=10,
+def _trigger_hidden_monster(s, str2, timeout=10,
                                    map_id=_HIDDEN_MONSTER_MAP_ID, trace=True,
                                    enter_map=False,
-                                   max_attempts=_HIDDEN_BATTLE_ATTEMPTS):
+                                   max_attempts=_HIDDEN_BATTLE_ATTEMPTS,
+                                   start_pos=None):
     """在 21102 中重复行走，直到 1300 命中并出现 1305。"""
     if map_id != _HIDDEN_MONSTER_MAP_ID:
         raise ValueError('隐形怪入口要求地图 21102，收到 map_id=%d' % map_id)
 
     session = _get_socket_session(s)
     self_id = int.from_bytes(bytes(str2), 'big')
-    current_pos = None
+    # 保留上一场战斗结束时的角色位置。每次调用本函数都会重新创建
+    # 局部状态；如果不传入该位置，下一场会退回抓包首点(1454, 802)，
+    # 服务器会认为客户端瞬移并主动断开连接。
+    current_pos = start_pos
     if enter_map:
         teleport = _build_hidden_map_enter_packet(str2)
         s.send(teleport)
@@ -2859,15 +2740,17 @@ def _trigger_hidden_monster_simple(s, str2, timeout=10,
         _trace_hidden_event(trace, 'begin encounter attempt', attempt=attempt,
                             max_attempts=max_attempts)
         server_steps_remaining = None
-        last_move = None
         retry_attempt = False
         for walk_index, walk_data in enumerate(_HIDDEN_CAPTURE_WALKS, 1):
             start_x, start_y, end_x, end_y, walk_step, direction, walk_type = walk_data
             # 1009 回包的 step 是服务器剩余遇怪步数。若下一次计划上报
             # 的已走步数足以归零，客户端会在途中停止并立即发起遇怪。
-            if (last_move and server_steps_remaining is not None and
+            if (server_steps_remaining is not None and
                     0 < server_steps_remaining <= walk_step):
-                move_start_x, move_start_y, move_end_x, move_end_y, direction = last_move
+                # 剩余步数对应的是“即将发送”的这一段路线，不能使用
+                # 上一段已经完成的路线，否则停止坐标会落在旧路径上。
+                move_start_x, move_start_y = start_x, start_y
+                move_end_x, move_end_y = end_x, end_y
                 distance = ((move_end_x - move_start_x) ** 2 +
                             (move_end_y - move_start_y) ** 2) ** 0.5
                 ratio = min(1.0, server_steps_remaining * 5 / distance) \
@@ -2886,7 +2769,11 @@ def _trigger_hidden_monster_simple(s, str2, timeout=10,
             packet = _build_walk_packet(
                 str2, start_x, start_y, end_x, end_y,
                 direction=direction, walk_step=walk_step, walk_type=walk_type,
-                channel=5 if attempt == 1 and walk_index == 1 else 6)
+                # 只有刚发送 1004 后的第一条 1009 使用 channel=5。
+                # 已经在 21102 内继续刷下一场时，客户端抓包使用 channel=6；
+                # 每场都重发 channel=5 会被服务端当作旧的进图序列处理，
+                # 随后通常表现为 1009 超时或主动断开。
+                channel=5 if enter_map and attempt == 1 and walk_index == 1 else 6)
             s.send(packet)
             label = 'send 1009 STOP_CHECK' if walk_type == 1 else 'send 1009 WALK'
             _trace_hidden_event(trace, label, packet,
@@ -2954,20 +2841,12 @@ def _trigger_hidden_monster_simple(s, str2, timeout=10,
                                 server_remaining=walk['step'],
                                 pos=(walk['pos_x'], walk['pos_y']))
             server_steps_remaining = walk['step']
-            last_move = (start_x, start_y, end_x, end_y, direction)
             time.sleep(_HIDDEN_WALK_INTERVAL)
 
         if retry_attempt:
             continue
 
     raise TimeoutError('21102 重复行走%d轮仍未遇到隐形怪' % max_attempts)
-
-
-def hidden_monster(s, str2, walk_packets=None, timeout=10,
-                   map_id=_HIDDEN_MONSTER_MAP_ID, trace=True):
-    """公开的 21102 隐形怪触发入口；默认最多尝试十轮。"""
-    return _trigger_hidden_monster_simple(
-        s, str2, timeout=timeout, map_id=map_id, trace=trace)
 
 
 def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_pwd=None):
@@ -2998,6 +2877,8 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
 
     time.sleep(0.1)
 
+    hidden_map_entered = False
+    hidden_position = None
     while True:
         try:
             if position == 1:
@@ -3030,17 +2911,19 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
                 s.send(req)
 
             elif position == 3:
-                # 吉普豆3号地道
-                packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
-                          *[0x54, 0xf7], 0, 0, 0, 0, 0, 0, *[0x0, 0xac], 0, 0, *[0x0, 0xcf], 0, 0, 0, 0]
-                req = struct.pack(*('38B',), *packet)
-                s.send(req)
-                time.sleep(0.1)
-
-                # 刷暗雷
-                packet = [0, 0, 0, *[0x1e, 0x05, 0x14], *str2, 0, 0, 6, random.randint(0, 255), *([0] * 16)]
-                req = struct.pack(*('30B',), *packet)
-                s.send(req)
+                # 隐形怪 21102：当前连接只在第一次循环进入地图，
+                # 后续战斗结束后继续在原地图内行走；重连时由
+                # hidden_map_entered=False 触发重新传送。
+                hidden_result = _trigger_hidden_monster(
+                    s,
+                    str2,
+                    trace=False,
+                    enter_map=not hidden_map_entered,
+                    start_pos=hidden_position,
+                )
+                hidden_map_entered = True
+                hidden_position = (
+                    hidden_result.get('pos_x'), hidden_result.get('pos_y'))
                 time.sleep(0.1)
             elif position == 4:
                 # 传送新生巨石蟹
@@ -3055,13 +2938,6 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
                         random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x09, 0xc7, 0, 0, 0, 0]
                 s.send(struct.pack('26B', *packet))
                 time.sleep(0.1)
-
-            elif position == 5:
-                # 先进入 21102，再按客户端固定路线累计 walkStepIdx。
-                hidden_result = _trigger_hidden_monster_simple(
-                    s, str2, trace=True, enter_map=True)
-                time.sleep(0.1)
-
 
             deferred_end_packets = []
             battle_ended = [False]
@@ -3121,7 +2997,7 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
 
             # 1300 只是遇敌请求确认；客户端还会等待 1305
             # BATTLE_START，收到后才开始发送 1306 资源加载进度。
-            if position == 5 and not hidden_result.get('battle_started'):
+            if position == 3 and not hidden_result.get('battle_started'):
                 receive_until({1305}, timeout=10)
 
             for battle_load_percent in range(10, 101, 10):
@@ -3250,6 +3126,8 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
             if login_result is None:
                 raise ConnectionError('战斗重连登录失败') from exc
             login_socket, s, str2 = login_result
+            hidden_map_entered = False
+            hidden_position = None
 
 def exchangelb(s, str2, type, count):
     if count <= 0:
