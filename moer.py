@@ -2553,9 +2553,20 @@ def _format_battle_rewards(rewards):
 _HIDDEN_MONSTER_MAP_ID = 21102
 
 
+def _build_hidden_map_enter_packet(str2, sequence=None):
+    """构造进入吉普豆 3 号地道（21102）的 1004 请求。"""
+    if len(str2) != 4:
+        raise ValueError('str2 必须是 4 字节用户标识')
+    sequence = random.randint(0, 255) if sequence is None else sequence
+    return bytes([0, 0, 0, 0x26, 0x03, 0xec, *str2, 0, 0, 5,
+                  sequence, 0, 0, 0, 0, 0, 0, 0x54, 0xf7,
+                  0, 0, 0, 0, 0, 0, 0, 0xac, 0, 0, 0, 0xcf,
+                  0, 0, 0, 0])
+
+
 def _build_walk_packet(str2, start_x, start_y, end_x, end_y, direction,
                        walk_step=0, walk_type=0, sequence=None,
-                       timestamp=None):
+                       timestamp=None, channel=6):
     """构造客户端 WalkModule.sendWalk 使用的 1009 请求。"""
     if len(str2) != 4:
         raise ValueError('str2 必须是 4 字节用户标识')
@@ -2567,7 +2578,7 @@ def _build_walk_packet(str2, start_x, start_y, end_x, end_y, direction,
     packet_length = 18 + len(payload)
     # SocketConnection 的 TMF 头：长度、命令、用户标识、会话/序号、保留字段。
     header = struct.pack('>IH4B4B4B', packet_length, 1009, *str2,
-                         0, 0, 6, sequence, 0, 0, 0, 0)
+                         0, 0, channel, sequence, 0, 0, 0, 0)
     return header + payload
 
 
@@ -2634,6 +2645,11 @@ def _trigger_hidden_monster(s, str2, walk_packets=None, timeout=10,
     reset step > 0（RoleModel.onRoleLocationUpdate 读取本地 walkStepIdx），
     不要求服务器再回送一条自己的 1009。
     """
+    return _trigger_hidden_monster_simple(
+        s, str2, timeout=timeout, map_id=map_id, trace=trace)
+
+    # 旧版的防御性进图/动态坐标流程保留在下方，便于对照历史抓包；
+    # 实际入口统一走上面的抓包流程。
     
     teleport = [0, 0, 0, 0x26, 0x03, 0xec, *str2, 0, 0, 5,
                 random.randint(0, 255), 0, 0, 0, 0, 0, 0,
@@ -2773,12 +2789,185 @@ def _trigger_hidden_monster(s, str2, walk_packets=None, timeout=10,
     raise TimeoutError('21102 行走回包未得到正 step，未发送 1300')
 
 
+# 21102 客户端抓包中的行走序列。walk_step 是客户端本地
+# WalkModule 的剩余步数，不是服务器 1009 回包里的 step 字段。
+_HIDDEN_CAPTURE_WALKS = (
+    # start_x, start_y, end_x, end_y, walk_step, direction, type
+    (1454, 802, 1179, 662, 0, 5, 0),
+    (1186, 665, 1280, 900, 30, 2, 0),
+    (1172, 671, 1277, 899, 25, 1, 0),
+    (1272, 889, 1184, 661, 24, 6, 0),
+    (1186, 666, 1300, 873, 24, 1, 0),
+    (1297, 867, 1182, 654, 23, 5, 0),
+    (1240, 761, 1240, 761, 13, 5, 1),
+)
+
+_HIDDEN_WALK_INTERVAL = 1
+_HIDDEN_BATTLE_ATTEMPTS = 10
+
+
+def _trigger_hidden_monster_simple(s, str2, timeout=10,
+                                   map_id=_HIDDEN_MONSTER_MAP_ID, trace=True,
+                                   enter_map=False,
+                                   max_attempts=_HIDDEN_BATTLE_ATTEMPTS):
+    """在 21102 中重复行走，直到 1300 命中并出现 1305。"""
+    if map_id != _HIDDEN_MONSTER_MAP_ID:
+        raise ValueError('隐形怪入口要求地图 21102，收到 map_id=%d' % map_id)
+
+    session = _get_socket_session(s)
+    self_id = int.from_bytes(bytes(str2), 'big')
+    current_pos = None
+    if enter_map:
+        teleport = _build_hidden_map_enter_packet(str2)
+        s.send(teleport)
+        _trace_hidden_event(trace, 'send 1004 ENTER_MAP', teleport,
+                            logical_map=map_id, entry_hex='0x54F7')
+        # 给服务端建立地图状态；1004 回包由下面的收包循环自然消费。
+        time.sleep(0.3)
+        enter_deadline = time.monotonic() + timeout
+        while time.monotonic() < enter_deadline:
+            try:
+                response = session.recv_packet(
+                    expected_command=1004,
+                    timeout=max(0.1, enter_deadline - time.monotonic()))
+            except socket.timeout:
+                break
+            if len(response) > 18:
+                current_pos = _parse_hidden_spawn_from_enter_map(response)
+                if current_pos:
+                    _trace_hidden_event(trace, 'recv 1004 ENTER_MAP', response,
+                                        pos=current_pos)
+                    break
+    # 登录时的 1004/1034 可能已经被前面的请求暂存；首个 1009
+    # 必须以服务器记录的当前位置为起点，否则服务端不会回 1009。
+    for pending in (session._pending_by_command.get(1004, ()),
+                    session._pending_by_command.get(1034, ())):
+        for cached in reversed(pending):
+            if int.from_bytes(cached[4:6], 'big') == 1004:
+                current_pos = _parse_hidden_spawn_from_enter_map(cached)
+            elif len(cached) >= 38:
+                _, _, _, current_x, current_y = struct.unpack_from('>IIIII', cached, 18)
+                if 0 < current_x < 10000 and 0 < current_y < 10000:
+                    current_pos = (current_x, current_y)
+            if current_pos:
+                break
+        if current_pos:
+            break
+    _trace_hidden_event(trace, 'cached map position', pos=current_pos)
+
+    for attempt in range(1, max_attempts + 1):
+        _trace_hidden_event(trace, 'begin encounter attempt', attempt=attempt,
+                            max_attempts=max_attempts)
+        server_steps_remaining = None
+        last_move = None
+        retry_attempt = False
+        for walk_index, walk_data in enumerate(_HIDDEN_CAPTURE_WALKS, 1):
+            start_x, start_y, end_x, end_y, walk_step, direction, walk_type = walk_data
+            # 1009 回包的 step 是服务器剩余遇怪步数。若下一次计划上报
+            # 的已走步数足以归零，客户端会在途中停止并立即发起遇怪。
+            if (last_move and server_steps_remaining is not None and
+                    0 < server_steps_remaining <= walk_step):
+                move_start_x, move_start_y, move_end_x, move_end_y, direction = last_move
+                distance = ((move_end_x - move_start_x) ** 2 +
+                            (move_end_y - move_start_y) ** 2) ** 0.5
+                ratio = min(1.0, server_steps_remaining * 5 / distance) \
+                    if distance else 0
+                stop_x = round(move_start_x + (move_end_x - move_start_x) * ratio)
+                stop_y = round(move_start_y + (move_end_y - move_start_y) * ratio)
+                start_x = end_x = stop_x
+                start_y = end_y = stop_y
+                walk_step = server_steps_remaining
+                walk_type = 1
+                _trace_hidden_event(
+                    trace, 'walkStepIdx reached zero', attempt=attempt,
+                    remaining=server_steps_remaining, pos=(stop_x, stop_y))
+            if walk_index == 1 and current_pos:
+                start_x, start_y = current_pos
+            packet = _build_walk_packet(
+                str2, start_x, start_y, end_x, end_y,
+                direction=direction, walk_step=walk_step, walk_type=walk_type,
+                channel=5 if attempt == 1 and walk_index == 1 else 6)
+            s.send(packet)
+            label = 'send 1009 STOP_CHECK' if walk_type == 1 else 'send 1009 WALK'
+            _trace_hidden_event(trace, label, packet,
+                                attempt=attempt, walk_index=walk_index,
+                                walk_step=walk_step)
+
+            # 停止检查包后发送 1300，并读取短确认。命中时 1305 可能
+            # 已经先到达，暂存给 battle() 的 receive_until 消费。
+            if walk_type == 1:
+                invite = _build_hidden_monster_invite(str2)
+                s.send(invite)
+                _trace_hidden_event(trace, 'send 1300 BATTLE_INVITE', invite,
+                                    attempt=attempt, trigger='walkStepIdx>0',
+                                    step=walk_step)
+                invite_deadline = time.monotonic() + timeout
+                while time.monotonic() < invite_deadline:
+                    try:
+                        response = session.recv_packet(
+                            timeout=max(0.1, invite_deadline - time.monotonic()))
+                    except socket.timeout:
+                        break
+                    command_id = int.from_bytes(response[4:6], 'big')
+                    if command_id == 1305:
+                        return {'pos_x': end_x, 'pos_y': end_y,
+                                'step': walk_step, 'direction': direction,
+                                'type': walk_type, 'battle_started': True}
+                    if command_id == 1300 and len(response) == 18:
+                        error_id = int.from_bytes(response[14:18], 'big')
+                        _trace_hidden_event(trace, 'recv 1300 ACK', response,
+                                            attempt=attempt, error=error_id)
+                        if error_id == 200076:
+                            current_pos = (end_x, end_y)
+                            retry_attempt = True
+                            break
+                        if error_id:
+                            raise TimeoutError(
+                                '21102 1300 返回错误（error=%d）' % error_id)
+                    elif command_id == 1009:
+                        # 停步包的自身广播会先于 1300 结果到达。
+                        continue
+                    else:
+                        session._pending_by_command.setdefault(command_id, deque()).append(response)
+                if retry_attempt:
+                    break
+                raise TimeoutError('21102 等待 1300/1305 响应超时')
+
+            deadline = time.monotonic() + timeout
+            walk = None
+            while time.monotonic() < deadline:
+                try:
+                    response = session.recv_packet(timeout=max(0.1, deadline - time.monotonic()))
+                except socket.timeout as exc:
+                    raise TimeoutError('21102 等待 1009 超时') from exc
+                command_id = int.from_bytes(response[4:6], 'big')
+                if command_id != 1009:
+                    session._pending_by_command.setdefault(command_id, deque()).append(response)
+                    continue
+                walk = _parse_player_walk_packet(response, self_id)
+                if walk is not None:
+                    break
+            if walk is None:
+                raise TimeoutError('21102 等待 1009 超时')
+            _trace_hidden_event(trace, 'recv 1009 SELF', response,
+                                attempt=attempt, step=walk_step,
+                                server_remaining=walk['step'],
+                                pos=(walk['pos_x'], walk['pos_y']))
+            server_steps_remaining = walk['step']
+            last_move = (start_x, start_y, end_x, end_y, direction)
+            time.sleep(_HIDDEN_WALK_INTERVAL)
+
+        if retry_attempt:
+            continue
+
+    raise TimeoutError('21102 重复行走%d轮仍未遇到隐形怪' % max_attempts)
+
+
 def hidden_monster(s, str2, walk_packets=None, timeout=10,
                    map_id=_HIDDEN_MONSTER_MAP_ID, trace=True):
-    """公开的 21102 隐形怪触发入口；成功后返回自己的 1009 行走信息。"""
-    return _trigger_hidden_monster(
-        s, str2, walk_packets=walk_packets, timeout=timeout,
-        map_id=map_id, trace=trace)
+    """公开的 21102 隐形怪触发入口；默认最多尝试十轮。"""
+    return _trigger_hidden_monster_simple(
+        s, str2, timeout=timeout, map_id=map_id, trace=trace)
 
 
 def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_pwd=None):
@@ -2868,9 +3057,9 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
                 time.sleep(0.1)
 
             elif position == 5:
-                # 21102 吉普豆3号地道：1034 返回正 step 后立即发送
-                # 1300(0, 0, 0)，对应客户端 RoleModel 的遇怪逻辑。
-                _trigger_hidden_monster(s, str2, trace=True)
+                # 先进入 21102，再按客户端固定路线累计 walkStepIdx。
+                hidden_result = _trigger_hidden_monster_simple(
+                    s, str2, trace=True, enter_map=True)
                 time.sleep(0.1)
 
 
@@ -2932,7 +3121,7 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
 
             # 1300 只是遇敌请求确认；客户端还会等待 1305
             # BATTLE_START，收到后才开始发送 1306 资源加载进度。
-            if position == 5:
+            if position == 5 and not hidden_result.get('battle_started'):
                 receive_until({1305}, timeout=10)
 
             for battle_load_percent in range(10, 101, 10):
