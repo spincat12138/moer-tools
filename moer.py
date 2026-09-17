@@ -3106,6 +3106,15 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
                     if  inid in _BATTLE_ITEM_NAMES:
                         _prop_backto_store(s, str2, inid, prop['quantity'])
                         print('%s已放入仓库,共%d个' % (_BATTLE_ITEM_NAMES.get(inid, '物品%d' % inid), prop['quantity']))
+                equipment_info, _ = _get_equipment_bag_info(s, str2)
+                for equipment in equipment_info:
+                    inid = equipment['item_id']
+                    if  inid in [
+                        142501, 142502, 142503, 142504, 142505, # 紫炼套装
+                        142001, 142002, 142003, 142004, 142005, # 祈福套装
+                        140280,                                 # 狩猎护巾
+                        ] :
+                        _equipment_sell(s, str2, inid, equipment['instance_id'])
             time.sleep(1)
         # SocketSession 在对端主动关闭时抛出 ConnectionError；与连接重置/
         # 中止一样重新登录，避免战斗循环因未捕获异常直接退出。
