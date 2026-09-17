@@ -339,7 +339,9 @@ def kaipai(uid, pwd, model, fwq=0):
                 exchangelb(s2, str2, type, count)
             if m == 123:
                 position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹']))
-                battle(s2, str2, position, login_socket=s)
+                battle(s2, str2, position, login_socket=s,  reconnect_fwq=fwq)
+            if m == 666:
+                tp_test(s2, str2)
         s.close()
         s2.close()
         print('成功退出')
@@ -1585,7 +1587,6 @@ def _parse_equipment_record(data, offset, str2):
         'item_id': good_id,
         'grid_id': grid_id,
         'level': level,
-        'quality': color_id,
         'equip_color_id': color_id,
         'validday': validday,
         'durability': durability,
@@ -2849,7 +2850,7 @@ def _trigger_hidden_monster(s, str2, timeout=10,
     raise TimeoutError('21102 重复行走%d轮仍未遇到隐形怪' % max_attempts)
 
 
-def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_pwd=None):
+def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_pwd=None, reconnect_fwq=None):
     """执行自动战斗；断线重连时使用传入的账号凭据。"""
     global mmh, mmh_mm
     if reconnect_uid is None:
@@ -3109,7 +3110,7 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
                 equipment_info, _ = _get_equipment_bag_info(s, str2)
                 for equipment in equipment_info:
                     inid = equipment['item_id']
-                    if  inid in [
+                    if inid in [
                         142501, 142502, 142503, 142504, 142505, # 紫炼套装
                         142001, 142002, 142003, 142004, 142005, # 祈福套装
                         140280,                                 # 狩猎护巾
@@ -3131,7 +3132,7 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
                 except OSError:
                     pass
             time.sleep(delay)
-            login_result = login_taomi(reconnect_uid, reconnect_pwd, model=1, fwq=0)
+            login_result = login_taomi(reconnect_uid, reconnect_pwd, model=1, fwq=reconnect_fwq if (reconnect_fwq in range(1,11)) else 0)
             if login_result is None:
                 raise ConnectionError('战斗重连登录失败') from exc
             login_socket, s, str2 = login_result
@@ -3176,18 +3177,12 @@ def exchangelb(s, str2, type, count):
 
     print('兑换成功')
 
-def jiadian_test(s, str2, pet_id):
-    packet = [0, 0, 0, 0x20, 0x06, 0x46, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, *pet_id, 0, 0,
-              0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-    t1 = tuple(packet)
-    req = struct.pack(*('32B',), *t1)
-    for i in range(150):
-        print(f'第{i + 1}次测试')            
-        s.send(req)
-        rev = tuple(s.recv(2048))
-        print('返回结果:', rev)
-        print('-------------------------------')
-        time.sleep(0.1)
+def tp_test(s, str2):
+    packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
+                          *[0x2c, 0xef], 0, 0, 0, 0, 0, 0, *[0x05, 0x66], 0, 0, *[0x03, 0xee], 0, 0, 0, 0]
+    req = struct.pack(*('38B',), *packet)
+    s.send(req)
+    time.sleep(0.1)
 
     print('测试完成')
 
