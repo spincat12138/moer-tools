@@ -2580,8 +2580,6 @@ def _format_battle_rewards(rewards):
                     for item_id in sorted(totals))
 
 
-_HIDDEN_MONSTER_MAP_ID = 21102
-
 
 def _build_hidden_map_enter_packet(str2, sequence=None):
     """构造进入吉普豆 3 号地道（21102）的 1004 请求。"""
@@ -2685,13 +2683,10 @@ _HIDDEN_BATTLE_ATTEMPTS = 10
 
 
 def _trigger_hidden_monster(s, str2, timeout=10,
-                                   map_id=_HIDDEN_MONSTER_MAP_ID, trace=True,
-                                   enter_map=False,
+                                   trace=True,
                                    max_attempts=_HIDDEN_BATTLE_ATTEMPTS,
                                    start_pos=None):
     """在 21102 中重复行走，直到 1300 命中并出现 1305。"""
-    if map_id != _HIDDEN_MONSTER_MAP_ID:
-        raise ValueError('隐形怪入口要求地图 21102，收到 map_id=%d' % map_id)
 
     session = _get_socket_session(s)
     self_id = int.from_bytes(bytes(str2), 'big')
@@ -2699,27 +2694,6 @@ def _trigger_hidden_monster(s, str2, timeout=10,
     # 局部状态；如果不传入该位置，下一场会退回抓包首点(1454, 802)，
     # 服务器会认为客户端瞬移并主动断开连接。
     current_pos = start_pos
-    if enter_map:
-        teleport = _build_hidden_map_enter_packet(str2)
-        s.send(teleport)
-        _trace_hidden_event(trace, 'send 1004 ENTER_MAP', teleport,
-                            logical_map=map_id, entry_hex='0x54F7')
-        # 给服务端建立地图状态；1004 回包由下面的收包循环自然消费。
-        time.sleep(0.3)
-        enter_deadline = time.monotonic() + timeout
-        while time.monotonic() < enter_deadline:
-            try:
-                response = session.recv_packet(
-                    expected_command=1004,
-                    timeout=max(0.1, enter_deadline - time.monotonic()))
-            except socket.timeout:
-                break
-            if len(response) > 18:
-                current_pos = _parse_hidden_spawn_from_enter_map(response)
-                if current_pos:
-                    _trace_hidden_event(trace, 'recv 1004 ENTER_MAP', response,
-                                        pos=current_pos)
-                    break
     # 登录时的 1004/1034 可能已经被前面的请求暂存；首个 1009
     # 必须以服务器记录的当前位置为起点，否则服务端不会回 1009。
     for pending in (session._pending_by_command.get(1004, ()),
@@ -2774,7 +2748,7 @@ def _trigger_hidden_monster(s, str2, timeout=10,
                 # 已经在 21102 内继续刷下一场时，客户端抓包使用 channel=6；
                 # 每场都重发 channel=5 会被服务端当作旧的进图序列处理，
                 # 随后通常表现为 1009 超时或主动断开。
-                channel=5 if enter_map and attempt == 1 and walk_index == 1 else 6)
+                channel=5 if attempt == 1 and walk_index == 1 else 6)
             s.send(packet)
             label = 'send 1009 STOP_CHECK' if walk_type == 1 else 'send 1009 WALK'
             _trace_hidden_event(trace, label, packet,
@@ -2878,7 +2852,6 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
 
     time.sleep(0.1)
 
-    hidden_map_entered = False
     hidden_position = None
     while True:
         try:
@@ -2912,6 +2885,12 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
                 s.send(req)
 
             elif position == 3:
+                # 吉普豆 3 号地道
+                packet = [0, 0, 0, 0x26, 0x03, 0xec, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x54, 0xf7,
+                  0, 0, 0, 0, 0, 0, 0, 0xac, 0, 0, 0, 0xcf, 0, 0, 0, 0]
+                req = struct.pack(*('38B',), *packet)
+                s.send(req)
+                time.sleep(0.1)
                 # 隐形怪 21102：当前连接只在第一次循环进入地图，
                 # 后续战斗结束后继续在原地图内行走；重连时由
                 # hidden_map_entered=False 触发重新传送。
@@ -2919,10 +2898,8 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
                     s,
                     str2,
                     trace=False,
-                    enter_map=not hidden_map_entered,
                     start_pos=hidden_position,
                 )
-                hidden_map_entered = True
                 hidden_position = (
                     hidden_result.get('pos_x'), hidden_result.get('pos_y'))
                 time.sleep(0.1)
@@ -3113,7 +3090,7 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None, reconnect_p
                     if inid in [
                         142501, 142502, 142503, 142504, 142505, # 紫炼套装
                         142001, 142002, 142003, 142004, 142005, # 祈福套装
-                        140280,                                 # 狩猎护巾
+                        140280, 140281                          # 狩猎护巾
                         ] :
                         _equipment_sell(s, str2, inid, equipment['instance_id'])
             time.sleep(1)
@@ -3178,8 +3155,10 @@ def exchangelb(s, str2, type, count):
     print('兑换成功')
 
 def tp_test(s, str2):
+    # packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
+    #                       *[0x2b, 0xc2], 0, 0, 0, 0, 0, 0, *[0x03, 0x84], 0, 0, *[0x02, 0x8a], 0, 0, 0, 0]
     packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
-                          *[0x2c, 0xef], 0, 0, 0, 0, 0, 0, *[0x05, 0x66], 0, 0, *[0x03, 0xee], 0, 0, 0, 0]
+                        *[0x2b, 0xc2], 0, 0, 0, 0, 0, 0, *[0x04, 0x7e], 0, 0, *[0x02, 0x58], 0, 0, 0, 0]
     req = struct.pack(*('38B',), *packet)
     s.send(req)
     time.sleep(0.1)
