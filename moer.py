@@ -349,7 +349,7 @@ def kaipai(uid, pwd, model, fwq=0):
                 count = int(input(['请输入兑换数量']))
                 exchangelb(s2, str2, type, count)
             if m == 123:
-                position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹']))
+                position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹，5伊影，6克拉斯岩洞外，7平原7区']))
                 battle(s2, str2, position, login_socket=s,  reconnect_fwq=fwq)
             if m == 666:
                 tp_test(s2, str2)
@@ -1831,7 +1831,7 @@ def cleanequipment(s, str2):
             _equipment_sell(s, str2, inid, item['instance_id'])
         
         # 丢弃绅士套/淑女套
-        if (inid >= 80070 and inid <= 80076):
+        if (inid >= 80070 and inid <= 80077):
             _equipment_discard(s, str2, inid, item['instance_id'])
                 
     print('装备清理完成')
@@ -2570,15 +2570,31 @@ _BATTLE_ITEM_NAMES = {
     240002: '地晶碎片',
     240003: '水晶碎片',
     240004: '火晶碎片',
+    250007: '怪盗迪迪拉图鉴',
     290011: '巨石碎片',
     290012: '魔力水晶',
+    300050: '空无一物礼袋I',
+    300051: '空无一物礼袋II',
+    300052: '空无一物礼袋III',
+    315005: '幽光战士精品蛋',
+    315007: '咕噜蝶精品蛋',
+    315015: '伊影精品蛋',
     340001: '吉普豆叶变身卡',
     340002: '吉普豆花变身卡',
     341007: '寂灭骨龙变身卡',
+    341009: '愤怒的吉利蛋变身卡',
     341011: '怪盗魔力潘变身卡',
+    341012: '风马兽变身卡',
+    350012: '刺尾龙蜥精灵蛋',
+    350038: '焰鳞小白龙精灵蛋',
+    350042: '愤怒的吉利蛋精灵蛋',
+    350045: '怪盗魔力潘精灵蛋',
     350050: '精灵经验笔记·改',
+    350051: '魔王密钥',
     360039: '黑银套装大礼包',
     360037: '重置丸春节礼包',
+    370057: '消魔石8级',
+    370107: '定智石8级',
 }
 
 
@@ -2953,7 +2969,6 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
     if reconnect_pwd is None:
         reconnect_pwd = mmh_mm
     battle_times = 0
-    battle_load_wait = 0.05
     reconnect_attempts = 0
 
     pet_data = _get_pet_bag(s, str2)
@@ -2973,54 +2988,112 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
 
     time.sleep(0.1)
 
+    battle_load_wait = 0.05
+    turn_wait = 0.05
+    end_wait = 1
+
+
+    if position == 1:
+        turn_wait = 0.05
+        end_wait = 0.5
+        # 海滩
+        packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
+                    *[0x56, 0x55], 0, 0, 0, 0, 0, 0, *[0x0, 0x5a], 0, 0, *[0x01, 0x8e], 0, 0, 0, 0]
+        req = struct.pack(*('38B',), *packet)
+        s.send(req)
+        time.sleep(0.3)
+
+    elif position == 2:
+        turn_wait = 0.1
+        end_wait = 4        
+        # 草木树海
+        packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
+                    *[0x2c, 0xef], 0, 0, 0, 0, 0, 0, *[0x05, 0x66], 0, 0, *[0x03, 0xee], 0, 0, 0, 0]
+        req = struct.pack(*('38B',), *packet)
+        s.send(req)
+        time.sleep(0.3)
+
+    elif position == 3:
+        turn_wait = 0.05
+        end_wait = 1
+        # 吉普豆 3 号地道
+        hidden_route = _HIDDEN_PATROL_ROUTES.get(hidden_map_id)
+        if hidden_route is None:
+            raise ValueError('未配置隐形怪地图%d的传送和巡回点' % hidden_map_id)
+
+        entry_x, entry_y = hidden_route['entry']
+        req = _build_hidden_map_enter_packet(
+            str2, hidden_route['map_id'], entry_x, entry_y)
+        s.send(req)
+        patrol_start, patrol_target = hidden_route['points']
+
+        time.sleep(0.3)
+
+    elif position == 4:
+        turn_wait = 0.1
+        end_wait = 3
+        # 传送新生巨石蟹
+        packet = [0, 0, 0, 0x26, 3, 0xec, *str2, 0, 0, random.randint(5, 6),
+            random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x75, 0xfb, 0,
+            0, 0, 0, 0, 0, 0, 0x8b, 0, 0, 0x01, 0x5d, 0, 0, 0, 0]
+        s.send(struct.pack('38B', *packet))
+        time.sleep(0.3)
+    
+    elif position == 5:
+        turn_wait = 0.2
+        end_wait = 2
+        # 传送yy
+        packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
+                    *[0x54, 0xC8], 0, 0, 0, 0, 0, 0, *[0x03, 0x20], 0, 0, *[0x03, 0x3e], 0, 0, 0, 0]
+        req = struct.pack(*('38B',), *packet)
+        s.send(req)
+        time.sleep(0.3)
+    
+    elif position == 6:
+        turn_wait = 0.05
+        end_wait = 0.5
+        # 克拉斯岩洞外
+        packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
+                    *[0x56, 0x56], 0, 0, 0, 0, 0, 0, *[0x01, 0xae], 0, 0, *[0x00, 0xdc], 0, 0, 0, 0]
+        req = struct.pack(*('38B',), *packet)
+        s.send(req)
+        time.sleep(0.3)
+
+    elif position == 7:
+        turn_wait = 0.05
+        end_wait = 0.5
+        # 平原7
+        packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
+                    *[0x53, 0x3b], 0, 0, 0, 0, 0, 0, *[0x05, 0xfb], 0, 0, *[0x01, 0xdd], 0, 0, 0, 0]
+        req = struct.pack(*('38B',), *packet)
+        s.send(req)
+        time.sleep(0.3)
+
     hidden_position = None
     while True:
         try:
+            # 星豆治疗
+            packet = [0, 0, 0, 22, 4, 1, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 5]
+            req = struct.pack(*('22B',), *packet)
+            s.send(req)
+            time.sleep(0.1)
             if position == 1:
-                # 传送海滩
-                packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
-                          *[0x56, 0x55], 0, 0, 0, 0, 0, 0, *[0x0, 0x5a], 0, 0, *[0x01, 0x8e], 0, 0, 0, 0]
-                req = struct.pack(*('38B',), *packet)
-                s.send(req)
-                time.sleep(0.1)
-
                 # 刷明雷
-                packet = [0, 0, 0, 30, 5, 20, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 9, 0,
+                packet = [0, 0, 0, 0x1e, 0x05, 0x14, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 9, 0,
                           0, 0, 0, 0, 0, 0, 0]
                 req = struct.pack(*('30B',), *packet)
                 s.send(req)
                 time.sleep(0.1)
 
             elif position == 2:
-                # 草木树海
-                packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
-                          *[0x2c, 0xef], 0, 0, 0, 0, 0, 0, *[0x05, 0x66], 0, 0, *[0x03, 0xee], 0, 0, 0, 0]
-                req = struct.pack(*('38B',), *packet)
-                s.send(req)
-                time.sleep(0.1)
-
                 # 刷食人花
                 packet = [0, 0, 0, *[0x1a, 0x05, 0x18], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0,
                           0x1e, 0, 0, 0, 0]
                 req = struct.pack(*('26B',), *packet)
                 s.send(req)
+                time.sleep(0.1)
 
             elif position == 3:
-                # 吉普豆 3 号地道
-                hidden_route = _HIDDEN_PATROL_ROUTES.get(hidden_map_id)
-                if hidden_route is None:
-                    raise ValueError('未配置隐形怪地图%d的传送和巡回点' % hidden_map_id)
-
-                entry_x, entry_y = hidden_route['entry']
-                req = _build_hidden_map_enter_packet(
-                    str2, hidden_route['map_id'], entry_x, entry_y)
-                s.send(req)
-
-                time.sleep(0.1)
-                # 隐形怪 21102：当前连接只在第一次循环进入地图，
-                # 后续战斗结束后继续在原地图内行走；重连时由
-                # hidden_map_entered=False 触发重新传送。
-                patrol_start, patrol_target = hidden_route['points']
                 hidden_result = _trigger_hidden_monster(
                     s,
                     str2,
@@ -3035,17 +3108,31 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
                     hidden_result.get('pos_x'), hidden_result.get('pos_y'))
                 time.sleep(0.1)
             elif position == 4:
-                # 传送新生巨石蟹
-                packet = [0, 0, 0, 0x26, 3, 0xec, *str2, 0, 0, random.randint(5, 6),
-                  random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x75, 0xfb, 0,
-                  0, 0, 0, 0, 0, 0, 0x8b, 0, 0, 0x01, 0x5d, 0, 0, 0, 0]
-                s.send(struct.pack('38B', *packet))
-                time.sleep(0.1)
-
                 # 2. 刷明雷战斗
                 packet = [0, 0, 0, 0x1a, 0x05, 0x18, *str2, 0, 0, random.randint(5, 6),
                         random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x09, 0xc7, 0, 0, 0, 0]
                 s.send(struct.pack('26B', *packet))
+                time.sleep(0.1)
+
+            elif position == 5:
+                # 2. 刷明雷战斗
+                packet = [0, 0, 0, 0x1a, 0x05, 0x18, *str2, 0, 0, random.randint(5, 6),
+                        random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x07, 0xda, 0, 0, 0, 0]
+                s.send(struct.pack('26B', *packet))
+                time.sleep(0.1)
+            
+            elif position == 6:
+                # 2. 刷明雷战斗
+                packet = [0, 0, 0, 0x1e, 0x05, 0x14, *str2, 0, 0, random.randint(5, 6),
+                        random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x00, 0x0e, 0, 0, 0, 0, 0, 0, 0, 0]
+                s.send(struct.pack('30B', *packet))
+                time.sleep(0.1)
+
+            elif position == 7:
+                # 2. 刷明雷战斗
+                packet = [0, 0, 0, 0x1e, 0x05, 0x14, *str2, 0, 0, random.randint(5, 6),
+                        random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x00, 0x0b, 0, 0, 0, 0, 0, 0, 0, 0]
+                s.send(struct.pack('30B', *packet))
                 time.sleep(0.1)
 
             deferred_end_packets = []
@@ -3109,20 +3196,20 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
             if position == 3 and not hidden_result.get('battle_started'):
                 receive_until({1305}, timeout=10)
 
-            for battle_load_percent in range(10, 101, 10):
+            for battle_load_percent in [1, 38, 76, 100]:
                 # BATTLE_RES_LOAD_PROGRESS 1306：进入战斗读秒（0-100）。
                 send_packet([0, 0, 0, 22, 5, 26, *str2, 0, 0, random.randint(5, 6),
                              random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, battle_load_percent])
                 # 新生巨石蟹的触发/读秒阶段处理较慢，过快连续发送
                 # 1306 会被服务器按异常会话复位连接。
-                time.sleep(0.3 if position == 4 else battle_load_wait)
+                time.sleep(battle_load_wait)
 
             # BATTLE_INIT_STATE 1317，然后等待 BATTLE_BEGIN_NOTICE 1307。
             send_packet([0, 0, 0, 22, 5, 37, *str2, 0, 0, 5, random.randint(0, 255),
                          0, 0, 0, 0, 0, 0, 0, 1])
             # 新生巨石蟹地图的 1304/1305 触发流程较慢，服务端可能在
             # 1317 确认后持续发送 1306/1316 十几秒才发 1307。
-            start_timeout = 30 if position == 4 else 10
+            start_timeout = 10
             receive_until({1307}, timeout=start_timeout)
 
             # 持续提交回合行动，直到服务器发来 1318 结算包。
@@ -3133,11 +3220,11 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
                 send_packet([0, 0, 0, 38, 5, 28, *str2, 0, 0, 5, random.randint(0, 255),
                              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                              255, 255, 255, 255, 0, 15, 66, 64, 0, 0, 0, 1])
-                time.sleep(0.05)
+                time.sleep(turn_wait)
                 send_packet([0, 0, 0, 38, 5, 28, *str2, 0, 0, 5, random.randint(0, 255),
                              0, 0, 0, 0, *pet_id, 0, 0, 0, 0, 255, 255, 255, 255,
                              0, 15, 66, 64, 0, 0, 0, 1])
-                time.sleep(0.05)
+                time.sleep(turn_wait)
                 # SET_ROLE_FLAG 1012：通知服务器本回合行动已提交。
                 send_packet([0, 0, 0, 26, 3, 244, *str2, 0, 0, 5, random.randint(0, 255),
                              0, 0, 0, 0, 0, 0, 0, 0x20, 0, 0, 0, 0])
@@ -3146,7 +3233,7 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
                     break
                 # 下一回合不要紧贴上一回合响应发送，给服务端完成回合
                 # 状态切换的时间；战斗过程记录中动作间隔约为 50ms。
-                time.sleep(0.05)
+                time.sleep(turn_wait)
 
             # 1318 可能按掉落条目重复返回；1319 才是战斗结束通知。
             rewards = []
@@ -3170,13 +3257,13 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
                 else:
                     _get_socket_session(s)._pending_by_command.setdefault(command_id, deque()).append(response)
 
-            # 提交战斗任务进度（TASK_SUBMIT_BUFFER 1165），并确认服务器已接收。
-            task_packet = [0, 0, 0, 154, 4, 141, *str2, 0, 0, 6,
-                           random.randint(0, 255)] + [0] * 140
-            task_packet[20:24] = [0x98, 0x5B, 0x03, 0x0B]
-            task_packet[71:75] = [0x0C, 0xFA, 0x00, 0x01]
-            send_packet(task_packet)
-            receive_until({1165})
+            # # 提交战斗任务进度（TASK_SUBMIT_BUFFER 1165），并确认服务器已接收。
+            # task_packet = [0, 0, 0, 154, 4, 141, *str2, 0, 0, 6,
+            #                random.randint(0, 255)] + [0] * 140
+            # task_packet[20:24] = [0x98, 0x5B, 0x03, 0x0B]
+            # task_packet[71:75] = [0x0C, 0xFA, 0x00, 0x01]
+            # send_packet(task_packet)
+            # receive_until({1165})
 
             # 战斗退出及角色/背包刷新请求。对应响应暂按需求忽略。
             send_packet([0, 0, 0, 26, 4, 6, *str2, 0, 0, 5,
@@ -3202,10 +3289,7 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
             else:
                 print('%s:战斗结果%d' % (time.strftime('%H:%M:%S'), battle_result))
             reconnect_attempts = 0
-            # 星豆治疗
-            packet = [0, 0, 0, 22, 4, 1, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 5]
-            req = struct.pack(*('22B',), *packet)
-            s.send(req)
+
             # 连续无间隔刷战斗会触发服务端连接保护；每场结束后留出
             # 一段冷却时间，避免下一场请求紧贴结算/刷新包。
             if battle_times % 50 == 0:
@@ -3224,9 +3308,9 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
                         140280, 140281, 140282                  # 狩猎套装
                         ] :
                         _equipment_sell(s, str2, inid, equipment['instance_id'])
-                    if (inid >= 80070 and inid <= 80076): # 绅士套装/淑女套装
+                    if (inid >= 80070 and inid <= 80077): # 绅士套装/淑女套装
                         _equipment_discard(s, str2, inid, equipment['instance_id'])
-            time.sleep(1)
+            time.sleep(end_wait)
         # SocketSession 在对端主动关闭时抛出 ConnectionError；与连接重置/
         # 中止一样重新登录，避免战斗循环因未捕获异常直接退出。
         except (ConnectionError, TimeoutError) as exc:
