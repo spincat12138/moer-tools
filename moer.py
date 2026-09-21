@@ -3296,6 +3296,9 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
                 prop_info, _ = _get_prop_bag_info(s, str2)
                 for prop in prop_info:
                     inid = prop['item_id']
+                    if inid in [341007, 341009, 341012]:
+                        _prop_sell(s, str2, inid, prop['quantity'])
+                        print('%s已自动出售,共%d个' % (_BATTLE_ITEM_NAMES.get(inid, '物品%d' % inid), prop['quantity']))
                     if  inid in _BATTLE_ITEM_NAMES:
                         _prop_backto_store(s, str2, inid, prop['quantity'])
                         print('%s已放入仓库,共%d个' % (_BATTLE_ITEM_NAMES.get(inid, '物品%d' % inid), prop['quantity']))
