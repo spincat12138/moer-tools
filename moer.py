@@ -2102,7 +2102,7 @@ def xd(s, str2, xz, num, switch_server):
         pet = a[xz]
         print('成长%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
             pet['grow_value'], pet['physique'], pet['hp_max'], pet['strength'], pet['attack'],
-            pet['endurance'], pet['defense'], pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
+            pet['endurance'], pet['defense'], pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
 
         if num == -1:
             num = int(input('选择丸子1绿色成长2红色成长3大丸子4紫色五项5红色五项(按0退出)')) - 1
@@ -2121,11 +2121,11 @@ def xd(s, str2, xz, num, switch_server):
             continue
 
         if num == 3 or num == 4 or num == 2:
-            dqwx = [pet['physique'], pet['attack'], pet['defense'], pet['speed'], pet['spirit']]
+            dqwx = [pet['physique'], pet['attack'], pet['defense'], pet['speed'], pet['intelligence']]
 
             # 用次数是否已设置判断是否为首次进入，允许五项目标全部填写 0。
             if xd_max_count == 0:
-                wx = [int(n) for n in input(['请输入五项:(体力/力量/耐力/速度/魔力) 体力/力量/速度为不低于设定数值，耐力/防御/魔力为不高于设定数值，0为不判断']).split(' ')]
+                wx = [int(n) for n in input(['请输入五项:(体力/力量/耐力/速度/智力) 体力/力量/速度为不低于设定数值，耐力/防御/智力为不高于设定数值，0为不判断']).split(' ')]
                 if len(wx) != 5:
                     print('请输入5个用空格分隔的数值')
                     _reset_xd_state()
@@ -2277,13 +2277,13 @@ def kd(s, str2, switch_server):
         num = 0
         for x, pet in enumerate(a):
             print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
-                x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
+                x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
             if (pet['grow_value'] >= expectwx[0] or expectwx[0] == 0) and pet['hp_max'] >= expectwx[1] and pet['attack'] >= expectwx[2] and (
                     expectwx[3] == 0 or pet['defense'] <= expectwx[3]) and pet['speed'] >= expectwx[4] and (
-                    expectwx[5] == 0 or pet['spirit'] <= expectwx[5]):
+                    expectwx[5] == 0 or pet['mp_max'] <= expectwx[5]):
                 print('体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
                     pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],
-                    pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
+                    pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
                 print('\n\n')
                 num += 1
 
@@ -3466,10 +3466,15 @@ def exchangelb(s, str2, type, count):
 
 def tp_test(s, str2):
 
-    packet = [0, 0, 0, 26, 4, 105, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0, 5, 87, 98, 0, 0, 0, 1]
-    t1 = tuple(packet)
-    req = struct.pack('26B', *t1)
-    s.send(req)
+    pet_data = _get_pet_bag(s, str2)
+        a = pet_data['pets']
+        i = pet_data['pet_count']
+        print('共有%d只宠物' % i)
+
+        num = 0
+        for x, pet in enumerate(a):
+            print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
+                x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
 
     print('测试完成')
 
