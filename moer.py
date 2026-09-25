@@ -27,6 +27,22 @@ _PROFESSION_NAMES = {
     9: '巫术士',
 }
 
+_TMF_HEADER_SIZE = 18
+_ROLE_ALLOCATE_ATTR_POINTS_COMMAND = 1027
+_RESET_ATTR_POINTS_COMMAND = 1115
+_ROLE_RESET_ATTR_POINTS_ITEM_ID = 360007
+_PET_ALLOCATE_ATTR_POINTS_COMMAND = 1606
+_PET_RESET_ATTR_POINTS_COMMAND = 1565
+_PET_RESET_ATTR_POINTS_ITEM_ID = 360010
+_ATTR_NAMES = ('体力', '力量', '耐力', '敏捷', '智力')
+_ATTR_KEYS = ('physique', 'strength', 'endurance', 'quick', 'intelligence')
+_PET_POSITION_NAMES = {
+    1: '宠物背包',
+    2: '待命',
+    3: '主战',
+    4: '辅助',
+}
+
 
 def _get_item_name(item_id):
     """返回 Item ID 对应的中文名，并明确标记资料中缺失的 ID。"""
@@ -348,7 +364,7 @@ def kaipai(uid, pwd, model, fwq=0):
         m = 1
         while m != 0:
             m = int(input(
-                ['请输入要使用的功能：1砸罐子,2分经验,3开书/丸子包/箱子,4清理背包,5丢仓库宠物,6洗点,7开蛋,8兑换水晶,9兑换奖牌/礼物,0退出']))
+                ['请输入要使用的功能：1砸罐子,2分经验,3开书/丸子包/箱子,4清理背包,5丢仓库宠物,6洗点,7开蛋,8兑换水晶,9兑换奖牌/礼物,10一键洗点/加点,0退出']))
             if m == 1:
                 zgz(s2, str2)
             if m == 2:
@@ -381,13 +397,15 @@ def kaipai(uid, pwd, model, fwq=0):
                 type = int(input(['请输入要兑换的物品：1巨石碎片->奖牌,2巨石碎片->宝物,3巨石碎片->大丸子']))
                 count = int(input(['请输入兑换数量']))
                 exchangelb(s2, str2, type, count)
+            if m == 10:
+                reset_and_allocate_attr_points_menu(s2, str2)
             if m == 123:
                 position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹，5伊影，6克拉斯岩洞外，7平原7区']))
                 turn_wait, end_wait = prompt_battle_waits(position)
                 battle(s2, str2, position, turn_wait, end_wait,
                        login_socket=s, reconnect_fwq=current_fwq)
             if m == 666:
-                tp_test(s2, str2)
+                shared_socket_thread_test(s2, str2)
         s.close()
         s2.close()
         print('成功退出')
@@ -1165,98 +1183,102 @@ def zgz(s, str2):
     cleanequipment(s, str2)
 
 
-def _get_pet_bag(s, str2):
-    """请求并解析 1554（PET_GETLIST）宠物背包信息。"""
-    pet_position_dict = {
-        1: '宠物背包',
-        2: '待命',
-        3: '主战',
-        4: '辅助',
-    }
-    packet = [0, 0, 0, 18, 6, 18, *str2, 0, 0, 4, random.randint(0, 255), 0, 0, 0, 0]
-    s.send(struct.pack('18B', *packet))
-    response = _receive_bag_response(s, str2, 1554, '宠物列表')
-    offset = 18
-
+def _parse_pet_info(data, offset, description):
+    """按客户端 PetInfo 构造函数解析一条完整宠物记录。"""
     def read(fmt):
         nonlocal offset
         size = struct.calcsize(fmt)
-        if offset + size > len(response):
-            raise ValueError('%s获取宠物列表失败：宠物记录被截断' % str2)
-        value = struct.unpack_from(fmt, response, offset)[0]
+        if offset + size > len(data):
+            raise ValueError('%s：宠物记录被截断' % description)
+        value = struct.unpack_from(fmt, data, offset)[0]
         offset += size
         return value
 
     def read_bytes(size):
         nonlocal offset
-        if offset + size > len(response):
-            raise ValueError('%s获取宠物列表失败：宠物记录被截断' % str2)
-        value = response[offset:offset + size]
+        if offset + size > len(data):
+            raise ValueError('%s：宠物记录被截断' % description)
+        value = data[offset:offset + size]
         offset += size
         return value
 
-    pet_count = read('>I')
-    pets = []
-    for _ in range(pet_count):
-        pet_id = read('>I')
-        type_id = read('>I')
-        pet = {
-            'pet_id': pet_id,
-            'pet_id_bytes': tuple(pet_id.to_bytes(4, byteorder='big')),
-            'type_id': type_id,
-            'race': read('>B'),
-            'flag': read('>I'),
-            'nick': read_bytes(16).split(b'\x00', 1)[0].decode('utf-8', errors='replace'),
-            'level': read('>I'),
-            'experience': read('>I'),
-            'physique': read('>H'),
-            'strength': read('>H'),
-            'endurance': read('>H'),
-            'quick': read('>H'),
-            'intelligence': read('>H'),
-            'attr_point_remaid': read('>H'),
-            'attr_point_applied': read('>H'),
-            'hp': read('>I'),
-            'mp': read('>I'),
-            'earth': read('>B'),
-            'water': read('>B'),
-            'fire': read('>B'),
-            'wind': read('>B'),
-            'injury_level': read('>I'),
-            'status': pet_position_dict.get(read('>B'), '未知'),
-            'hp_max': read('>I'),
-            'mp_max': read('>I'),
-            'attack': read('>H'),
-            'defense': read('>H'),
-            'speed': read('>H'),
-            'spirit': read('>H'),
-            'resume': read('>H'),
-            'hit_rate': read('>H'),
-            'avoid_rate': read('>H'),
-            'critical': read('>H'),
-            'fight_back': read('>H'),
-            'grow_value': read('>H'),
-        }
+    pet_id = read('>I')
+    pet = {
+        'pet_id': pet_id,
+        'pet_id_bytes': tuple(pet_id.to_bytes(4, byteorder='big')),
+        'type_id': read('>I'),
+        'race': read('>B'),
+        'flag': read('>I'),
+        'nick': read_bytes(16).split(b'\x00', 1)[0].decode(
+            'utf-8', errors='replace'),
+        'level': read('>I'),
+        'experience': read('>I'),
+        'physique': read('>H'),
+        'strength': read('>H'),
+        'endurance': read('>H'),
+        'quick': read('>H'),
+        'intelligence': read('>H'),
+        'attr_point_remaid': read('>H'),
+        'attr_point_applied': read('>H'),
+        'hp': read('>I'),
+        'mp': read('>I'),
+        'earth': read('>B'),
+        'water': read('>B'),
+        'fire': read('>B'),
+        'wind': read('>B'),
+        'injury_level': read('>I'),
+        'status': _PET_POSITION_NAMES.get(read('>B'), '未知'),
+        'hp_max': read('>I'),
+        'mp_max': read('>I'),
+        'attack': read('>H'),
+        'defense': read('>H'),
+        'speed': read('>H'),
+        'spirit': read('>H'),
+        'resume': read('>H'),
+        'hit_rate': read('>H'),
+        'avoid_rate': read('>H'),
+        'critical': read('>H'),
+        'fight_back': read('>H'),
+        'grow_value': read('>H'),
+    }
 
-        skill_count = read('>I')
-        if skill_count > (len(response) - offset - 5) // 9:
-            raise ValueError('%s获取宠物列表失败：技能数量与包长不匹配' % str2)
-        skills = []
-        for _ in range(skill_count):
-            skills.append({
-                'skill_id': read('>I'),
-                'level': max(1, read('>B')),
-                'experience': read('>I'),
-            })
-        pet['skill_count'] = skill_count
-        pet['skills'] = skills
-        pet['is_reincarnation_enable'] = bool(read('>?'))
-        pet['reincarnation_degree'] = read('>B')
-        pet['additional_growth'] = read('>I')
+    skill_count = read('>I')
+    if skill_count > (len(data) - offset - 6) // 9:
+        raise ValueError('%s：技能数量与包长不匹配' % description)
+    skills = []
+    for _ in range(skill_count):
+        skills.append({
+            'skill_id': read('>I'),
+            'level': max(1, read('>B')),
+            'experience': read('>I'),
+        })
+    pet['skill_count'] = skill_count
+    pet['skills'] = skills
+    pet['is_reincarnation_enable'] = bool(read('>?'))
+    pet['reincarnation_degree'] = read('>B')
+    pet['additional_growth'] = read('>I')
+    return pet, offset
+
+
+def _get_pet_bag(s, str2):
+    """请求并解析 1554（PET_GETLIST）宠物背包信息。"""
+    packet = [0, 0, 0, 18, 6, 18, *str2, 0, 0, 4,
+              random.randint(0, 255), 0, 0, 0, 0]
+    s.send(struct.pack('18B', *packet))
+    response = _receive_bag_response(s, str2, 1554, '宠物列表')
+    if len(response) < _TMF_HEADER_SIZE + 4:
+        raise ValueError('%s获取宠物列表失败：响应包被截断' % str2)
+
+    pet_count = struct.unpack_from('>I', response, _TMF_HEADER_SIZE)[0]
+    offset = _TMF_HEADER_SIZE + 4
+    pets = []
+    description = '%s获取宠物列表失败' % str2
+    for _ in range(pet_count):
+        pet, offset = _parse_pet_info(response, offset, description)
         pets.append(pet)
 
     if offset != len(response):
-        raise ValueError('%s获取宠物列表失败：包尾存在未解析数据' % str2)
+        raise ValueError('%s：包尾存在未解析数据' % description)
     return {'pet_count': pet_count, 'pets': pets}
 
 
@@ -2036,6 +2058,313 @@ def openbook(s, str2):
         s.send(req)
         if i % 100 == 0:
             time.sleep(0.5)
+
+
+def _build_tmf_request(str2, command_id, payload):
+    """按客户端 TMF 格式构造请求包。"""
+    if len(str2) != 4:
+        raise ValueError('str2 必须是 4 字节用户标识')
+    if not 0 <= command_id <= 0xffff:
+        raise ValueError('命令号超出 uint16 范围')
+
+    payload = bytes(payload)
+    packet_length = _TMF_HEADER_SIZE + len(payload)
+    return struct.pack(
+        '>IH4B4B4B',
+        packet_length,
+        command_id,
+        *str2,
+        0,
+        0,
+        random.randint(5, 6),
+        random.randint(0, 255),
+        0,
+        0,
+        0,
+        0,
+    ) + payload
+
+
+def _parse_tmf_response_payload(packet, expected_command):
+    """校验 TMF 回包头并返回负载；头部最后 4 字节为错误码。"""
+    if len(packet) < _TMF_HEADER_SIZE:
+        raise ValueError('%d协议回包头不完整' % expected_command)
+
+    packet_length, command_id = struct.unpack_from('>IH', packet)
+    if packet_length != len(packet):
+        raise ValueError(
+            '%d协议回包长度不一致（声明%d，实际%d）' %
+            (expected_command, packet_length, len(packet)))
+    if command_id != expected_command:
+        raise ValueError(
+            '协议命令不匹配（期望%d，实际%d）' %
+            (expected_command, command_id))
+
+    error_code = struct.unpack_from('>I', packet, 14)[0]
+    if error_code != 0:
+        raise RuntimeError(
+            '%d协议返回错误码%d（0x%08X）' %
+            (expected_command, error_code, error_code))
+    return packet[_TMF_HEADER_SIZE:]
+
+
+def _send_tmf_request(s, str2, command_id, payload, timeout=10):
+    packet = _build_tmf_request(str2, command_id, payload)
+    s.sendall(packet)
+    return _get_socket_session(s).recv_packet(
+        expected_command=command_id, timeout=timeout)
+
+
+def _parse_role_reset_attr_points_response(packet):
+    """解析 1115：角色/宠物 ID、剩余点和当前 HP/MP。"""
+    payload = _parse_tmf_response_payload(
+        packet, _RESET_ATTR_POINTS_COMMAND)
+    expected_size = struct.calcsize('>IHIIII')
+    if len(payload) != expected_size:
+        raise ValueError(
+            '1115协议负载长度错误（期望%d，实际%d）' %
+            (expected_size, len(payload)))
+
+    pet_id, remain_points, hp, mp, hp_max, mp_max = struct.unpack(
+        '>IHIIII', payload)
+    return {
+        'pet_id': pet_id,
+        'remain_points': remain_points,
+        'hp': hp,
+        'mp': mp,
+        'hp_max': hp_max,
+        'mp_max': mp_max,
+    }
+
+
+def _parse_role_allocate_attr_points_response(packet):
+    """解析 1027 的精简或扩展回包。"""
+    payload = _parse_tmf_response_payload(
+        packet, _ROLE_ALLOCATE_ATTR_POINTS_COMMAND)
+    compact_format = '>6H'
+    extended_format = '>6HII9H'
+    compact_size = struct.calcsize(compact_format)
+    extended_size = struct.calcsize(extended_format)
+    if len(payload) not in (compact_size, extended_size):
+        raise ValueError(
+            '1027协议负载长度错误（期望%d或%d，实际%d）' %
+            (compact_size, extended_size, len(payload)))
+
+    values = struct.unpack_from(compact_format, payload)
+    result = dict(zip(_ATTR_NAMES, values[:5]))
+    result['剩余点数'] = values[5]
+    if len(payload) == extended_size:
+        extended_values = struct.unpack(extended_format, payload)
+        result.update({
+            'hp_max': extended_values[6],
+            'mp_max': extended_values[7],
+            'attack': extended_values[8],
+            'defense': extended_values[9],
+            'speed': extended_values[10],
+            'spirit': extended_values[11],
+            'resume': extended_values[12],
+            'hit_rate': extended_values[13],
+            'avoid_rate': extended_values[14],
+            'critical': extended_values[15],
+            'fight_back': extended_values[16],
+        })
+    return result
+
+
+def _parse_pet_attr_points_response(packet, expected_command):
+    """解析 1565/1606 回包中的完整 PetInfo。"""
+    if expected_command not in (
+            _PET_RESET_ATTR_POINTS_COMMAND,
+            _PET_ALLOCATE_ATTR_POINTS_COMMAND):
+        raise ValueError('不支持的宠物加点协议：%d' % expected_command)
+
+    payload = _parse_tmf_response_payload(packet, expected_command)
+    pet, offset = _parse_pet_info(
+        payload, 0, '%d协议回包解析失败' % expected_command)
+    if offset != len(payload):
+        raise ValueError('%d协议回包存在未解析数据' % expected_command)
+    return pet
+
+
+def _prompt_attr_points(subject, max_value, max_total=None):
+    while True:
+        raw_value = input(
+            '请输入%s加点（体力 力量 耐力 敏捷 智力，用空格分隔）：' %
+            subject).strip()
+        try:
+            points = tuple(int(value) for value in raw_value.split())
+        except ValueError:
+            print('五项加点必须全部是整数')
+            continue
+        if len(points) != len(_ATTR_NAMES):
+            print('请输入5个用空格分隔的数值')
+            continue
+        if any(value < 0 or value > max_value for value in points):
+            print('每项加点必须在0到%d之间' % max_value)
+            continue
+        if max_total is not None and sum(points) > max_total:
+            print('加点总和%d超过洗点后的可分配点%d，请重新输入' %
+                  (sum(points), max_total))
+            continue
+        return points
+
+
+def _reset_and_allocate_role_attr_points(s, str2):
+    points = _prompt_attr_points('人物', 0xffffffff)
+    reset_payload = struct.pack(
+        '>II', 0, _ROLE_RESET_ATTR_POINTS_ITEM_ID)
+
+    try:
+        reset_packet = _send_tmf_request(
+            s, str2, _RESET_ATTR_POINTS_COMMAND, reset_payload)
+        reset_result = _parse_role_reset_attr_points_response(reset_packet)
+    except (socket.timeout, ConnectionError, OSError, ValueError,
+            RuntimeError) as exc:
+        print('人物洗点失败：%s' % exc)
+        return
+
+    if reset_result['pet_id'] != 0:
+        print('人物洗点失败：1115回包返回了宠物ID %d' %
+              reset_result['pet_id'])
+        return
+
+    remain_points = reset_result['remain_points']
+    print('人物洗点成功，可分配点数：%d' % remain_points)
+    if sum(points) > remain_points:
+        print('原加点总和%d超过可分配点，请按实际点数重新输入' % sum(points))
+        points = _prompt_attr_points(
+            '人物', 0xffffffff, max_total=remain_points)
+
+    allocate_payload = struct.pack('>5I', *points)
+    try:
+        allocate_packet = _send_tmf_request(
+            s, str2, _ROLE_ALLOCATE_ATTR_POINTS_COMMAND,
+            allocate_payload)
+    except (socket.timeout, ConnectionError, OSError) as exc:
+        print('人物洗点已成功，但加点请求失败：%s' % exc)
+        return
+
+    try:
+        result = _parse_role_allocate_attr_points_response(
+            allocate_packet)
+    except RuntimeError as exc:
+        print('人物洗点已成功，但服务端拒绝加点：%s' % exc)
+        return
+    except ValueError as exc:
+        print('人物加点回包解析失败，服务端可能已完成加点：%s' % exc)
+        return
+
+    attrs = '，'.join('%s%d' % (name, result[name])
+                     for name in _ATTR_NAMES)
+    print('人物加点成功：%s，剩余点数%d' % (attrs, result['剩余点数']))
+
+
+def _select_pet_for_attr_points(s, str2):
+    try:
+        pet_data = _get_pet_bag(s, str2)
+    except (socket.timeout, ConnectionError, OSError, ValueError) as exc:
+        print('获取宠物列表失败：%s' % exc)
+        return None
+
+    pets = pet_data['pets']
+    if not pets:
+        print('宠物背包中没有可选择的宠物')
+        return None
+
+    print('共有%d只宠物' % len(pets))
+    for index, pet in enumerate(pets, start=1):
+        attrs = '，'.join(
+            '%s%d' % (name, pet[key])
+            for name, key in zip(_ATTR_NAMES, _ATTR_KEYS))
+        print('%d.%s（等级%d，%s，%s，剩余点数%d）' % (
+            index, pet['nick'], pet['level'], pet['status'], attrs,
+            pet['attr_point_remaid']))
+
+    while True:
+        raw_value = input('请选择要洗点/加点的宠物，输入0返回：').strip()
+        try:
+            pet_number = int(raw_value)
+        except ValueError:
+            print('宠物编号必须是整数')
+            continue
+        if pet_number == 0:
+            return None
+        if 1 <= pet_number <= len(pets):
+            return pets[pet_number - 1]
+        print('宠物编号不存在')
+
+
+def _reset_and_allocate_pet_attr_points(s, str2):
+    selected_pet = _select_pet_for_attr_points(s, str2)
+    if selected_pet is None:
+        return
+
+    expected_total = (selected_pet['attr_point_remaid'] +
+                      selected_pet['attr_point_applied'])
+    points = _prompt_attr_points(
+        '宠物', 0xffff, max_total=expected_total)
+    pet_id = selected_pet['pet_id']
+    reset_payload = struct.pack(
+        '>II', pet_id, _PET_RESET_ATTR_POINTS_ITEM_ID)
+
+    try:
+        reset_packet = _send_tmf_request(
+            s, str2, _PET_RESET_ATTR_POINTS_COMMAND, reset_payload)
+        reset_pet = _parse_pet_attr_points_response(
+            reset_packet, _PET_RESET_ATTR_POINTS_COMMAND)
+    except (socket.timeout, ConnectionError, OSError, ValueError,
+            RuntimeError) as exc:
+        print('宠物“%s”洗点失败：%s' % (selected_pet['nick'], exc))
+        return
+
+    if reset_pet['pet_id'] != pet_id:
+        print('宠物洗点失败：1565回包宠物ID不匹配（期望%d，实际%d）' %
+              (pet_id, reset_pet['pet_id']))
+        return
+
+    remain_points = reset_pet['attr_point_remaid']
+    print('宠物“%s”洗点成功，可分配点数：%d' %
+          (reset_pet['nick'], remain_points))
+    if sum(points) > remain_points:
+        print('原加点总和%d超过服务端返回的可分配点，请重新输入' % sum(points))
+        points = _prompt_attr_points(
+            '宠物', 0xffff, max_total=remain_points)
+
+    # 反编译客户端以 ByteArray 写入 petId:uint32 + 5 个 uint16。
+    allocate_payload = struct.pack('>I5H', pet_id, *points)
+    try:
+        allocate_packet = _send_tmf_request(
+            s, str2, _PET_ALLOCATE_ATTR_POINTS_COMMAND,
+            allocate_payload)
+        result_pet = _parse_pet_attr_points_response(
+            allocate_packet, _PET_ALLOCATE_ATTR_POINTS_COMMAND)
+    except (socket.timeout, ConnectionError, OSError, ValueError,
+            RuntimeError) as exc:
+        print('宠物“%s”洗点已成功，但加点失败：%s' %
+              (reset_pet['nick'], exc))
+        return
+
+    if result_pet['pet_id'] != pet_id:
+        print('宠物加点失败：1606回包宠物ID不匹配（期望%d，实际%d）' %
+              (pet_id, result_pet['pet_id']))
+        return
+
+    attrs = '，'.join(
+        '%s%d' % (name, result_pet[key])
+        for name, key in zip(_ATTR_NAMES, _ATTR_KEYS))
+    print('宠物“%s”加点成功：%s，剩余点数%d' % (
+        result_pet['nick'], attrs, result_pet['attr_point_remaid']))
+
+
+def reset_and_allocate_attr_points_menu(s, str2):
+    choice = input(
+        '请选择洗点/加点类型：1.人物洗点/加点，2.宠物洗点/加点，0.返回：').strip()
+    if choice == '1':
+        _reset_and_allocate_role_attr_points(s, str2)
+    elif choice == '2':
+        _reset_and_allocate_pet_attr_points(s, str2)
+    elif choice != '0':
+        print('洗点/加点类型不存在')
 
 
 def _reset_xd_state():
@@ -3444,19 +3773,164 @@ def exchangelb(s, str2, type, count):
 
     print('兑换成功')
 
-def tp_test(s, str2):
 
-    pet_data = _get_pet_bag(s, str2)
-    a = pet_data['pets']
-    i = pet_data['pet_count']
-    print('共有%d只宠物' % i)
+def shared_socket_thread_test(s, str2):
+    """启动两个线程，并让它们共享同一个 socket。"""
 
-    num = 0
-    for x, pet in enumerate(a):
-        print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
-            x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
+    def first_thread(s, str2):
+        global mmh, mmh_mm
+        battle_times = 0
 
-    print('测试完成')
+        pet_data = _get_pet_bag(s, str2)
+        a = pet_data['pets']
+        i = pet_data['pet_count']
+        pet_flag = False
+        for x in range(i):
+            if a[x]['status'] == '主战':
+                pet_id = a[x]['pet_id_bytes']
+                pet_flag = True
+                print(f"找到主战宠物{a[x]['nick']}")
+            else:
+                pass
+        if not pet_flag:
+            pet_id = [0, 0, 0, 0]
+            print("没有主战宠物！")
+
+        time.sleep(0.1)
+
+        while True:
+            try:
+                skill_time = 8
+                # 传送海滩
+                packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
+                        *[0x56, 0x55], 0, 0, 0, 0, 0, 0, *[0x0, 0x5a], 0, 0, *[0x01, 0x8e], 0, 0, 0, 0]
+                req = struct.pack(*('38B',), *packet)
+                s.send(req)
+                time.sleep(0.1)
+
+                # 刷明雷
+                packet = [0, 0, 0, 30, 5, 20, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 9, 0,
+                        0, 0, 0, 0, 0, 0, 0]
+                req = struct.pack(*('30B',), *packet)
+                s.send(req)
+                time.sleep(0.1)
+
+                for battle_load_percent in range(5, 101, 5):
+                    # 进入战斗读秒（0-100）
+                    packet = [0, 0, 0, 22, 5, 26, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0,
+                            0, 0, battle_load_percent]
+                    req = struct.pack(*('22B',), *packet)
+                    s.send(req)
+                    time.sleep(0.1)
+
+                # 不知道干啥用的，大概是进入战斗
+                packet = [0, 0, 0, 22, 5, 37, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 1]
+                req = struct.pack(*('22B',), *packet)
+                s.send(req)
+                time.sleep(0.1)
+
+                # packet = [0, 0, 0, 18, 6, 28, *str2, 0, 0, 5, 221, 0, 0, 0, 0, 0, 0, 0, 0]
+                # t1 = tuple(packet)
+                # req = (struct.pack)(*('22B', ), *t1)
+                # s.send(req)
+                # time.sleep(0.2)
+
+                # 自动释放技能
+                for i in range(0, skill_time):
+                    # 人物自动攻击
+                    packet = [0, 0, 0, 38, 5, 28, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                            0,
+                            255, 255, 255, 255, 0, 15, 66, 64, 0, 0, 0, 1]
+                    req = struct.pack(*('38B',), *packet)
+                    s.send(req)
+                    time.sleep(0.05)
+
+                    # 宠物自动攻击
+                    packet = [0, 0, 0, 38, 5, 28, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, *pet_id, 0, 0,
+                            0, 0, 255, 255, 255, 255, 0, 15, 66, 64, 0, 0, 0, 1]
+                    req = struct.pack(*('38B',), *packet)
+                    s.send(req)
+                    time.sleep(0.05)
+                    # SET_ROLE_FLAG 1012：通知服务器本回合行动已提交。
+                    packet = [0, 0, 0, 26, 3, 244, *str2, 0, 0, 5, random.randint(0, 255),
+                             0, 0, 0, 0, 0, 0, 0, 0x20, 0, 0, 0, 0]
+                    req = struct.pack(*('26B',), *packet)
+                    s.send(req)
+                    time.sleep(0.05)         
+
+                    #原版有'h12064a头的包，不知道干什么用的
+                    packet = [0, 0, 0, 18, 6, 74, *str2, 0, 0, 5, random.randint(0,255), 0, 0, 0, 0]
+                    t1 = tuple(packet)
+                    req = (struct.pack)(*('18B', ), *t1)
+                    s.send(req)
+                    time.sleep(0.2)
+
+                task_packet = [0, 0, 0, 154, 4, 141, *str2, 0, 0, 6,
+                        random.randint(0, 255)] + [0] * 140
+                task_packet[20:24] = [0x98, 0x5B, 0x03, 0x0B]
+                task_packet[71:75] = [0x0C, 0xFA, 0x00, 0x01]
+                t1 = tuple(task_packet)
+                req = (struct.pack)(*('154B', ), *t1)
+                s.send(req)
+
+                # 大概是结束战斗（1a0406）
+                packet = [0, 0, 0, 26, 4, 6, *str2, 0, 0, 6, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1]
+                t1 = tuple(packet)
+                req = struct.pack(*('26B',), *t1)
+                s.send(req)
+                time.sleep(0.1)
+
+                packet = [0, 0, 0, 18, 5, 64, *str2, 0, 0, 5,
+                         random.randint(0, 255), 0, 0, 0, 0]
+                t1 = tuple(packet)
+                req = struct.pack(*('18B',), *t1)
+                s.send(req)
+                time.sleep(0.1)
+
+                # 星豆治疗
+                packet = [0, 0, 0, 22, 4, 1, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 5]
+                req = struct.pack(*('22B',), *packet)
+                s.send(req)
+
+                battle_times = battle_times + 1
+                print(time.strftime('%H:%M:%S ') + f"完成第{battle_times}次战斗")
+
+                time.sleep(0.1)
+            except (ConnectionAbortedError, ConnectionResetError):
+                _, s, str2 = login_taomi(mmh, mmh_mm, model=1, fwq=0)
+
+    def second_thread(s, str2):
+        global mmh, mmh_mm
+
+        while True:
+            try:
+                if random.randint(1, 11) == 1:
+                    # 洗点：1/11 概率。
+                    packet = [00,00,00,0x1A,0x06,0x1D,*str2,00,00,0x05,0x06,00,00,00,00,0x63,0xFB,0x80,0x2A,0x00,0x05,0x7E,0x4A]
+                    t1 = tuple(packet)
+                    req = struct.pack(*('26B',), *t1)
+                    s.send(req)
+                    print('洗点')
+                else:
+                    # 加点：10/11 概率，是洗点概率的 10 倍。
+                    packet = [00,00,00,0x20,0x06,0x46,*str2,00,00,0x05,0x07,00,00,00,00,0x63,0xFB,0x80,0x2A,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00]
+                    t1 = tuple(packet)
+                    req = struct.pack(*('32B',), *t1)
+                    s.send(req)
+                    print('加点')
+
+                time.sleep(0.05)
+            except (ConnectionAbortedError, ConnectionResetError):
+                _, s, str2 = login_taomi(mmh, mmh_mm, model=1, fwq=0)
+
+    threads = [
+        threading.Thread(target=first_thread, args=(s,str2), name='shared-socket-thread-1'),
+        threading.Thread(target=second_thread, args=(s,str2), name='shared-socket-thread-2'),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
 
 if __name__ == '__main__':
     login_interface('account.txt')
