@@ -364,7 +364,7 @@ def kaipai(uid, pwd, model, fwq=0):
         m = 1
         while m != 0:
             m = int(input(
-                ['请输入要使用的功能：1砸罐子,2分经验,3开书/丸子包/箱子,4清理背包,5丢仓库宠物,6洗点,7开蛋,8兑换水晶,9兑换奖牌/礼物,10一键洗点/加点,0退出']))
+                ['请输入要使用的功能：1砸罐子,2分经验,3开书/丸子包/箱子,4背包/仓库操作,5丢仓库宠物,6洗点,7开蛋,8兑换水晶,9兑换奖牌/礼物,10一键洗点/加点,0退出']))
             if m == 1:
                 zgz(s2, str2)
             if m == 2:
@@ -383,8 +383,7 @@ def kaipai(uid, pwd, model, fwq=0):
                     id = int(input(['请输入要开启的物品代码']))
                     openjmbox(s2, str2, id)
             if m == 4:
-                clearbag(s2, str2)
-                cleanequipment(s2, str2)
+                bag_store_operations(s2, str2)
             if m == 5:
                 fscw(s2, str2)
             if m == 6:
@@ -1533,6 +1532,41 @@ def _prop_backto_store(s, str2, item_id, quantity):
     time.sleep(0.1)
 
 
+def _move_equip_storage(s, str2, direction, instance_id):
+    """通过1124协议在装备背包和仓库之间移动一个装备实例。"""
+    if direction not in (0, 1):
+        raise ValueError('装备移动方向必须是0或1')
+
+    if isinstance(instance_id, int):
+        if instance_id <= 0 or instance_id > 0xFFFFFFFF:
+            raise ValueError('装备实例ID必须是有效的uint32正整数')
+        instance_id_bytes = instance_id.to_bytes(4, byteorder='big')
+    else:
+        try:
+            instance_id_bytes = bytes(instance_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('装备实例ID必须是uint32或4字节序列') from exc
+        if len(instance_id_bytes) != 4 or int.from_bytes(instance_id_bytes, byteorder='big') == 0:
+            raise ValueError('装备实例ID必须是非零的4字节序列')
+
+    direction_bytes = direction.to_bytes(4, byteorder='big')
+    packet = [0, 0, 0, 26, 4, 100, *str2, 0, 0, 5, 15, 0, 0, 0, 0,
+              *direction_bytes, *instance_id_bytes]
+    req = struct.pack(*('26B',), *tuple(packet))
+    s.send(req)
+    time.sleep(0.1)
+
+
+def _equip_backto_store(s, str2, instance_id):
+    """将指定实例的背包装备放入仓库。"""
+    _move_equip_storage(s, str2, 1, instance_id)
+
+
+def _fetch_equip_from_store(s, str2, instance_id):
+    """将指定实例的仓库装备取回背包。"""
+    _move_equip_storage(s, str2, 0, instance_id)
+
+
 def _prop_sell(s, str2, item_id, quantity):
     """出售指定数量的道具。"""
     item_id_bytes = item_id.to_bytes(4, byteorder='big')
@@ -1563,6 +1597,143 @@ def _equipment_discard(s, str2, item_id, instance_id):
     s.send(req)
     print('装备“%s”已丢弃' % _get_item_name(item_id))
     time.sleep(0.1)
+
+
+def bag_store_operations(s, str2):
+    """处理背包与仓库之间的手动道具、装备转移。"""
+    while True:
+        try:
+            operation = int(input(
+                '请选择操作：1.背包道具->仓库，2.仓库->背包道具，'
+                '3.背包装备->仓库，4.仓库->背包装备，0.返回\n'))
+        except ValueError:
+            print('操作编号必须是整数')
+            continue
+
+        if operation == 0:
+            return
+        _run_bag_store_operation(s, str2, operation)
+
+
+def _run_bag_store_operation(s, str2, operation):
+    """执行一次背包或仓库操作，完成后由上层菜单继续接收选择。"""
+    if operation not in (1, 2, 3, 4):
+        print('无效的操作编号')
+        return
+
+    if operation in (3, 4):
+        if operation == 3:
+            equipment_info, _ = _get_equipment_bag_info(s, str2)
+            source_name = '背包'
+            empty_message = '背包中没有装备'
+            input_message = '请输入要放入仓库的装备实例ID：'
+            move_equipment = _equip_backto_store
+            success_message = '%s已放入仓库'
+        else:
+            equipment_info, _ = _get_equip_store_info(s, str2)
+            source_name = '仓库'
+            empty_message = '仓库中没有装备'
+            input_message = '请输入要从仓库拿出的装备实例ID：'
+            move_equipment = _fetch_equip_from_store
+            success_message = '%s已从仓库拿出'
+
+        if not equipment_info:
+            print(empty_message)
+            return
+
+        print('%s装备：' % source_name)
+        for equipment in equipment_info:
+            instance_id = int.from_bytes(
+                bytes(equipment['instance_id']), byteorder='big')
+            print('道具ID：%d，实例ID：%d，名称：%s' % (
+                equipment['item_id'], instance_id,
+                _get_item_name(equipment['item_id'])))
+
+        try:
+            selected_instance_id = int(input(input_message))
+        except ValueError:
+            print('装备实例ID必须是整数')
+            return
+
+        selected_equipment = next((
+            equipment for equipment in equipment_info
+            if int.from_bytes(bytes(equipment['instance_id']), byteorder='big')
+            == selected_instance_id
+        ), None)
+        if selected_equipment is None:
+            print('%s中不存在实例ID为%d的装备' % (
+                source_name, selected_instance_id))
+            return
+
+        move_equipment(s, str2, selected_equipment['instance_id'])
+        print(success_message % _get_item_name(selected_equipment['item_id']))
+        return
+
+    if operation == 2:
+        prop_info, _ = _get_prop_store_info(s, str2)
+        if not prop_info:
+            print('仓库中没有道具')
+            return
+
+        print('仓库道具：')
+        for prop in prop_info:
+            print('ID：%d，名称：%s，数量：%d' % (
+                prop['item_id'], _get_item_name(prop['item_id']), prop['quantity']))
+
+        try:
+            item_id = int(input('请输入要从仓库拿出的道具ID：'))
+            quantity = int(input('请输入要从仓库拿出的数量：'))
+        except ValueError:
+            print('道具ID和数量必须是整数')
+            return
+
+        available_quantity = sum(
+            prop['quantity'] for prop in prop_info if prop['item_id'] == item_id)
+        if available_quantity == 0:
+            print('仓库中不存在ID为%d的道具' % item_id)
+            return
+        if quantity <= 0:
+            print('拿出数量必须大于0')
+            return
+        if quantity > available_quantity:
+            print('拿出数量不能超过仓库持有数量%d' % available_quantity)
+            return
+
+        _fetch_item_from_store(s, str2, item_id, quantity)
+        print('%s已从仓库拿出，共%d个' % (_get_item_name(item_id), quantity))
+        return
+
+    prop_info, _ = _get_prop_bag_info(s, str2)
+    if not prop_info:
+        print('背包中没有道具')
+        return
+
+    print('背包道具：')
+    for prop in prop_info:
+        print('ID：%d，名称：%s，数量：%d' % (
+            prop['item_id'], _get_item_name(prop['item_id']), prop['quantity']))
+
+    try:
+        item_id = int(input('请输入要放入仓库的道具ID：'))
+        quantity = int(input('请输入要放入仓库的数量：'))
+    except ValueError:
+        print('道具ID和数量必须是整数')
+        return
+
+    available_quantity = sum(
+        prop['quantity'] for prop in prop_info if prop['item_id'] == item_id)
+    if available_quantity == 0:
+        print('背包中不存在ID为%d的道具' % item_id)
+        return
+    if quantity <= 0:
+        print('放入数量必须大于0')
+        return
+    if quantity > available_quantity:
+        print('放入数量不能超过背包持有数量%d' % available_quantity)
+        return
+
+    _prop_backto_store(s, str2, item_id, quantity)
+    print('%s已放入仓库，共%d个' % (_get_item_name(item_id), quantity))
 
 
 def clearbag(s, str2):
@@ -1725,6 +1896,64 @@ def _get_equipment_bag_info(s, str2):
     return equipment_info, equipment_count
 
 
+def _get_equip_store_info(s, str2):
+    """
+    获取并解析仓库内的全部装备信息。
+    :param s: socket连接
+    :param str2: 米米号
+    :return: 结构化装备信息列表和仓库装备总数
+    """
+    page_size = 360
+    start_index = 0
+    total_count = None
+    equipment_info = []
+
+    while True:
+        start_index_bytes = start_index.to_bytes(4, byteorder='big')
+        page_size_bytes = page_size.to_bytes(4, byteorder='big')
+        packet = [0, 0, 0, 26, 4, 98, *str2, 0, 0, 4, 233, 0, 0, 0, 0,
+                  *start_index_bytes, *page_size_bytes]
+        s.send(struct.pack(*('26B',), *tuple(packet)))
+
+        response = _receive_bag_response(s, str2, 1122, '装备仓库列表')
+        offset = 18
+        if len(response) - offset < 12:
+            raise ValueError('%s获取装备仓库列表失败：缺少分页信息' % str2)
+
+        response_total, response_start, page_count = struct.unpack_from(
+            '>III', response, offset)
+        offset += 12
+
+        if response_start != start_index:
+            raise ValueError('%s获取装备仓库列表失败：分页起始位置不匹配' % str2)
+        if total_count is None:
+            total_count = response_total
+        elif response_total != total_count:
+            raise ValueError('%s获取装备仓库列表失败：分页总数不一致' % str2)
+        if response_start > total_count or page_count > total_count - response_start:
+            raise ValueError('%s获取装备仓库列表失败：分页数量超出装备总数' % str2)
+        if page_count > (len(response) - offset) // 96:
+            raise ValueError('%s获取装备仓库列表失败：装备数量与包长不匹配' % str2)
+
+        for _ in range(page_count):
+            item, offset = _parse_equipment_record(response, offset, str2)
+            equipment_info.append(item)
+
+        if offset != len(response):
+            raise ValueError('%s获取装备仓库列表失败：包尾存在未解析数据' % str2)
+
+        next_index = response_start + page_size
+        if total_count <= next_index:
+            break
+        if page_count == 0:
+            raise ValueError('%s获取装备仓库列表失败：分页未返回装备数据' % str2)
+        start_index = next_index
+
+    if len(equipment_info) != total_count:
+        raise ValueError('%s获取装备仓库列表失败：实际装备数量与总数不一致' % str2)
+    return equipment_info, total_count
+
+
 def _get_more_userinfo(s, str2):
     """请求并解析 1006（GET_MORE_USERINFO）的人物详细信息。"""
     packet = [0, 0, 0, 22, 3, 238, *str2, 0, 0, 5, 175, 0, 0, 0, 0, *str2]
@@ -1869,6 +2098,41 @@ def _get_prop_bag_info(s, str2):
 
     if offset != len(response):
         raise ValueError('%s获取道具列表失败：包尾存在未解析数据' % str2)
+    return prop_info, prop_count
+
+
+def _get_prop_store_info(s, str2):
+    """
+    获取并解析道具仓库中的物品信息。
+    :param s: socket连接
+    :param str2: 米米号
+    :return: 结构化物品信息列表和物品数量
+    """
+    packet = [0, 0, 0, 18, 4, 97, *str2, 0, 0, 4, 233, 0, 0, 0, 0]
+    t1 = tuple(packet)
+    req = struct.pack(*('18B',), *t1)
+    s.send(req)
+
+    response = _receive_bag_response(s, str2, 1121, '道具仓库列表')
+    offset = 18
+    if len(response) - offset < 4:
+        raise ValueError('%s获取道具仓库列表失败：缺少物品数量' % str2)
+    prop_count = struct.unpack_from('>I', response, offset)[0]
+    offset += 4
+    if prop_count > (len(response) - offset) // 8:
+        raise ValueError('%s获取道具仓库列表失败：物品数量与包长不匹配' % str2)
+
+    prop_info = []
+    for _ in range(prop_count):
+        good_id, quantity = struct.unpack_from('>II', response, offset)
+        offset += 8
+        prop_info.append({
+            'item_id': good_id,
+            'quantity': quantity,
+        })
+
+    if offset != len(response):
+        raise ValueError('%s获取道具仓库列表失败：包尾存在未解析数据' % str2)
     return prop_info, prop_count
 
 
@@ -2549,11 +2813,10 @@ def _fetch_item_from_store(s, str2, item_id, quantity):
     :param item_id: 物品ID
     :param quantity: 数量
     '''
-    item_id = int(item_id)
-    item_id_bytes = [item_id // 65536, item_id // 256 % 256, item_id % 256]
-    quantity_bytes = [quantity // 256, quantity % 256]
-    packet = [0, 0, 0, 30, 4, 99, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 0, 0, *item_id_bytes, 0, 0,
-              *quantity_bytes]
+    item_id_bytes = int(item_id).to_bytes(4, byteorder='big')
+    quantity_bytes = int(quantity).to_bytes(4, byteorder='big')
+    packet = [0, 0, 0, 30, 4, 99, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0,
+              0, 0, 0, 0, *item_id_bytes, *quantity_bytes]
     t1 = tuple(packet)
     req = struct.pack(*('30B',), *t1)
     s.send(req)
