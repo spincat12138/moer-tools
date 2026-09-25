@@ -199,7 +199,7 @@ def get_account(myfile='account.txt'):
             account[uid] = pwd1
     return account
 
-def login_taomi(uid, pwd, model=1, fwq=0):
+def login_taomi(uid, pwd, model=1, fwq=0, return_server=False):
     uid_hex = hex(uid)
     str1 = ''.join(uid_hex)
     str2 = list()
@@ -304,12 +304,38 @@ def login_taomi(uid, pwd, model=1, fwq=0):
     print('昵称：%s，职业：%s，等级：%s' % (
         user_info['nick'], profession, user_info['level']))
 
+    if return_server:
+        return s, s2, str2, fwq
     return s, s2, str2
+
+
+def _switch_server(uid, pwd, login_socket, game_socket, current_fwq):
+    """登录同组的另一台服务器，成功后关闭旧连接。"""
+    server_range = range(1, 11) if current_fwq in range(1, 11) else range(11, 21)
+    available_servers = [server for server in server_range if server != current_fwq]
+    next_fwq = random.choice(available_servers)
+    login_result = login_taomi(uid, pwd, model=1, fwq=next_fwq, return_server=True)
+    if login_result is None:
+        raise ConnectionError('换服登录失败')
+
+    new_login_socket, new_game_socket, str2, next_fwq = login_result
+    for old_socket in (login_socket, game_socket):
+        try:
+            old_socket.close()
+        except OSError as exc:
+            print('关闭旧服务器连接失败：%s' % exc)
+    return new_login_socket, new_game_socket, str2, next_fwq
 
 
 def kaipai(uid, pwd, model, fwq=0):
 
-    s, s2, str2 = login_taomi(uid, pwd, model, fwq)
+    s, s2, str2, current_fwq = login_taomi(uid, pwd, model, fwq, return_server=True)
+
+    def switch_server():
+        nonlocal s, s2, str2, current_fwq
+        s, s2, str2, current_fwq = _switch_server(
+            uid, pwd, s, s2, current_fwq)
+        return s2, str2
 
     if model == 1:
         m = 1
@@ -339,9 +365,9 @@ def kaipai(uid, pwd, model, fwq=0):
             if m == 5:
                 fscw(s2, str2)
             if m == 6:
-                xd_menu(s2, str2)
+                xd_menu(s2, str2, switch_server)
             if m == 7:
-                kd(s2, str2)
+                kd(s2, str2, switch_server)
             if m == 8:
                 excrystal(s2, str2)
             if m == 9:
@@ -352,7 +378,7 @@ def kaipai(uid, pwd, model, fwq=0):
                 position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹，5伊影，6克拉斯岩洞外，7平原7区']))
                 turn_wait, end_wait = prompt_battle_waits(position)
                 battle(s2, str2, position, turn_wait, end_wait,
-                       login_socket=s, reconnect_fwq=fwq)
+                       login_socket=s, reconnect_fwq=current_fwq)
             if m == 666:
                 tp_test(s2, str2)
         s.close()
@@ -2014,24 +2040,34 @@ def _reset_xd_state():
     xd_max_count = 0
 
 
-def _should_retry_xd():
-    """洗点结束后等待用户选择：回车重试，0 返回宠物列表。"""
+def _get_continue_action(prompt):
+    """读取继续、返回或换服操作。"""
     while True:
-        choice = input('[按回车使用相同设置重试，按0返回]').strip()
-        if choice == '':
-            return True
-        if choice == '0':
-            return False
-        print('请直接按回车重试，或输入0返回')
+        choice = input(prompt).strip()
+        if choice in ('', '0', '886'):
+            return choice
+        print('请直接按回车继续，输入886换服继续，或输入0返回')
 
 
-def xd_menu(s, str2):
+def _get_xd_continue_action():
+    return _get_continue_action(
+        '[按回车使用相同设置重试，输入886换服继续，按0返回]')
+
+
+def xd_menu(s, str2, switch_server):
     """洗点子菜单；每次结束后重新选择宠物，输入 0 返回主功能菜单。"""
-    while not xd(s, str2, -1, -1):
+    session = {'game_socket': s, 'str2': str2}
+
+    def switch_and_update_session():
+        session['game_socket'], session['str2'] = switch_server()
+        return session['game_socket'], session['str2']
+
+    while not xd(session['game_socket'], session['str2'], -1, -1,
+                 switch_and_update_session):
         pass
 
 
-def xd(s, str2, xz, num):
+def xd(s, str2, xz, num, switch_server):
     global cz
     global wx
     global xd_count
@@ -2114,17 +2150,27 @@ def xd(s, str2, xz, num):
 
             if is_satisfied:
                 print('洗点成功，一共洗点%d次' % xd_count)
-                if _should_retry_xd():
+                action = _get_xd_continue_action()
+                if action == '':
                     xd_count = 0
                     eatwz(s, str2, pet, num)
+                    continue
+                if action == '886':
+                    s, str2 = switch_server()
+                    xd_count = 0
                     continue
                 _reset_xd_state()
                 return False
             if xd_count >= xd_max_count:
                 print('已达到指定洗点次数，一共洗点%d次' % xd_count)
-                if _should_retry_xd():
+                action = _get_xd_continue_action()
+                if action == '':
                     xd_count = 0
                     eatwz(s, str2, pet, num)
+                    continue
+                if action == '886':
+                    s, str2 = switch_server()
+                    xd_count = 0
                     continue
                 _reset_xd_state()
                 return False
@@ -2177,7 +2223,12 @@ def _fetch_item_from_store(s, str2, item_id, quantity):
     s.send(req)
 
 
-def kd(s, str2):
+def _get_kd_continue_action(petid):
+    return _get_continue_action(
+        '[按回车使用相同设置继续开%d，输入886换服继续，按0退出]' % petid)
+
+
+def kd(s, str2, switch_server):
     petid = int(input(['请输入开蛋的编号']))
     packet = [0, 0, 0, 22, 7, 208, *str2, 0, 0, 5, 179, 0, 0, 0, 0, *str2]
     t1 = tuple(packet)
@@ -2194,21 +2245,29 @@ def kd(s, str2):
     expectwx = input(['请输入期望的数值(成长 生命 攻击 防御 速度 魔力),不追求的输入0，防御和魔力反向'])
     expectwx = expectwx.split(' ')
     expectwx = [int(x) for x in expectwx]
+    kd_max_count = int(input(['请输入本轮最多开蛋数量，按0退出']))
+    if kd_max_count == 0:
+        return
+    if kd_max_count < 0:
+        print('开蛋数量必须大于0')
+        return
 
     s1 = list()
     s1.append(int(petid / 65536))
     s1.append(int(petid / 256 % 256))
     s1.append(petid % 256)
-    con = ''
-    petcount = 0
-    while con == '':
-        _fetch_item_from_store(s, str2, petid, 6)
+    kd_count = 0
+    kd_total_count = 0
+    while True:
+        batch_size = min(6, kd_max_count - kd_count)
+        _fetch_item_from_store(s, str2, petid, batch_size)
         packet = [0, 0, 0, 22, 4, 106, *str2, 0, 0, 5, 77, 0, 0, 0, 0, 0, *s1]
-        for i in range(6):
+        for i in range(batch_size):
             t1 = tuple(packet)
             req = struct.pack(*('22B',), *t1)
             s.send(req)
-        petcount += 6
+        kd_count += batch_size
+        kd_total_count += batch_size
 
         pet_data = _get_pet_bag(s, str2)
         a = pet_data['pets']
@@ -2243,14 +2302,14 @@ def kd(s, str2):
             r1 = tuple(rec)
 
         exp = getexp(r1[(-8):(-4)])
+        reached_limit = kd_count >= kd_max_count
+        print('本轮已开%d/%d个蛋，累计开了%d个蛋，经验树剩余经验%d' % (
+            kd_count, kd_max_count, kd_total_count, exp))
 
         if num > 0:
-            print('累计开了%d个蛋,经验树剩余经验%d' % (petcount, exp))
             clean = int(input(['是否进行清理，按1清理，按0退出']))
-        elif num == 0:
-            clean = 1
         else:
-            clean = 0
+            clean = 1
         if clean == 1:
             for pet in a:
                 if pet['level'] > 1:
@@ -2269,10 +2328,17 @@ def kd(s, str2):
                     print('进行碰蛋')
                     pengdan(pet, a[b - 1], str2, s)
             clearbag(s, str2)
-            if num > 0:
-                con = input(['是否继续开%d,回车继续,按0退出' % petid])
+            if num > 0 or reached_limit:
+                if reached_limit:
+                    print('已达到本轮指定开蛋数量%d' % kd_max_count)
+                action = _get_kd_continue_action(petid)
+                if action == '0':
+                    return
+                if action == '886':
+                    s, str2 = switch_server()
+                kd_count = 0
         else:
-            con = 0
+            return
 
 
 def _pet_back_home(s, str2, pet):
