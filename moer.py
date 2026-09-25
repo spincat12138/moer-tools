@@ -4,6 +4,8 @@ from collections import deque
 
 from uncompyle6.parsers.reducecheck import tryexcept
 
+from item_names import ITEM_NAMES as _ITEM_NAMES
+
 cz = 0
 wx = [0, 0, 0, 0, 0]
 xd_count = 0
@@ -24,6 +26,11 @@ _PROFESSION_NAMES = {
     8: '圣言使',
     9: '巫术士',
 }
+
+
+def _get_item_name(item_id):
+    """返回 Item ID 对应的中文名，并明确标记资料中缺失的 ID。"""
+    return _ITEM_NAMES.get(item_id, '未知物品（Item ID：%d）' % item_id)
 
 
 class SocketSession:
@@ -1522,7 +1529,7 @@ def _equipment_sell(s, str2, item_id, instance_id):
     t1 = tuple(packet)
     req = struct.pack(*('26B',), *t1)
     s.send(req)
-    print('代码%d装备已出售' % item_id)
+    print('装备“%s”已出售' % _get_item_name(item_id))
     time.sleep(0.1)
 
 
@@ -1532,7 +1539,7 @@ def _equipment_discard(s, str2, item_id, instance_id):
     t1 = tuple(packet)
     req = struct.pack(*('22B',), *t1)
     s.send(req)
-    print('代码%d装备已丢弃' % item_id)
+    print('装备“%s”已丢弃' % _get_item_name(item_id))
     time.sleep(0.1)
 
 
@@ -1548,10 +1555,10 @@ def clearbag(s, str2):
                                                                                                  180042, 230012,
                                                                                                  300002):
             _prop_backto_store(s, str2, inid, prop['quantity'])
-            print('代码%d物品已放入仓库' % inid)
+            print('%s已放入仓库' % _get_item_name(inid))
         if (inid >= 200004 and inid < 210000) or inid in (180043, 180044):
             _prop_sell(s, str2, inid, prop['quantity'])
-            print('代码%d物品已出售' % inid)
+            print('%s已出售' % _get_item_name(inid))
 
     print('清理完毕')
 
@@ -2225,7 +2232,8 @@ def _fetch_item_from_store(s, str2, item_id, quantity):
 
 def _get_kd_continue_action(petid):
     return _get_continue_action(
-        '[按回车使用相同设置继续开%d，输入886换服继续，按0退出]' % petid)
+        '[按回车使用相同设置继续开%s，输入886换服继续，按0退出]' %
+        _get_item_name(petid))
 
 
 def kd(s, str2, switch_server):
@@ -2241,7 +2249,7 @@ def kd(s, str2, switch_server):
         rec = s.recv(2048)
         r1 = tuple(rec)
     exp = getexp(r1[(-8):(-4)])
-    print('开蛋编号:%d,经验树剩余经验:%d' % (petid, exp))
+    print('开蛋物品:%s,经验树剩余经验:%d' % (_get_item_name(petid), exp))
     expectwx = input(['请输入期望的数值(成长 生命 攻击 防御 速度 魔力),不追求的输入0，防御和魔力反向'])
     expectwx = expectwx.split(' ')
     expectwx = [int(x) for x in expectwx]
@@ -2628,43 +2636,15 @@ def _parse_battle_over_notice(packet):
     return result
 
 
-_BATTLE_ITEM_NAMES = {
-    180004: '暗精魄',
-    180007: '暗精魄',
-    180057: '吉普花朵',
-    180058: '吉普草叶',
-    210003: '3级生命之息',
-    230003: 'M2曲奇',
-    240001: '风晶碎片',
-    240002: '地晶碎片',
-    240003: '水晶碎片',
-    240004: '火晶碎片',
-    250007: '怪盗迪迪拉图鉴',
-    290011: '巨石碎片',
-    290012: '魔力水晶',
-    300050: '空无一物礼袋I',
-    300051: '空无一物礼袋II',
-    300052: '空无一物礼袋III',
-    315005: '幽光战士精品蛋',
-    315007: '咕噜蝶精品蛋',
-    315015: '伊影精品蛋',
-    340001: '吉普豆叶变身卡',
-    340002: '吉普豆花变身卡',
-    341007: '寂灭骨龙变身卡',
-    341009: '愤怒的吉利蛋变身卡',
-    341011: '怪盗魔力潘变身卡',
-    341012: '风马兽变身卡',
-    350012: '刺尾龙蜥精灵蛋',
-    350038: '焰鳞小白龙精灵蛋',
-    350042: '愤怒的吉利蛋精灵蛋',
-    350045: '怪盗魔力潘精灵蛋',
-    350050: '精灵经验笔记·改',
-    350051: '魔王密钥',
-    360039: '黑银套装大礼包',
-    360037: '重置丸春节礼包',
-    370057: '消魔石8级',
-    370107: '定智石8级',
-}
+_AUTO_STORE_ITEM_IDS = frozenset({
+    *range(180001, 180041),
+    180007, 180057, 180058, 
+    210003, 230003, 
+    240001, 240002, 240003, 240004, 250007, 290011, 290012, 
+    300050, 300051, 300052, 315005, 315007, 315015, 
+    340001, 340002, 341007, 341009, 341011, 341012, 
+    350050, 350051, 360037, 360039, 370057, 370107,
+})
 
 
 def _format_battle_rewards(rewards):
@@ -2676,7 +2656,7 @@ def _format_battle_rewards(rewards):
             totals[item_id] = totals.get(item_id, 0) + item['count']
     if not totals:
         return '无道具掉落'
-    return '，'.join('%sx%d' % (_BATTLE_ITEM_NAMES.get(item_id, '物品%d' % item_id), totals[item_id])
+    return '，'.join('%sx%d' % (_get_item_name(item_id), totals[item_id])
                     for item_id in sorted(totals))
 
 
@@ -3388,10 +3368,10 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                     inid = prop['item_id']
                     if inid in [341007, 341009, 341012]:
                         _prop_sell(s, str2, inid, prop['quantity'])
-                        print('%s已自动出售,共%d个' % (_BATTLE_ITEM_NAMES.get(inid, '物品%d' % inid), prop['quantity']))
-                    if  inid in _BATTLE_ITEM_NAMES:
+                        print('%s已自动出售,共%d个' % (_get_item_name(inid), prop['quantity']))
+                    if inid in _AUTO_STORE_ITEM_IDS:
                         _prop_backto_store(s, str2, inid, prop['quantity'])
-                        print('%s已放入仓库,共%d个' % (_BATTLE_ITEM_NAMES.get(inid, '物品%d' % inid), prop['quantity']))
+                        print('%s已放入仓库,共%d个' % (_get_item_name(inid), prop['quantity']))
                 equipment_info, _ = _get_equipment_bag_info(s, str2)
                 for equipment in equipment_info:
                     inid = equipment['item_id']
@@ -3467,14 +3447,14 @@ def exchangelb(s, str2, type, count):
 def tp_test(s, str2):
 
     pet_data = _get_pet_bag(s, str2)
-        a = pet_data['pets']
-        i = pet_data['pet_count']
-        print('共有%d只宠物' % i)
+    a = pet_data['pets']
+    i = pet_data['pet_count']
+    print('共有%d只宠物' % i)
 
-        num = 0
-        for x, pet in enumerate(a):
-            print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
-                x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
+    num = 0
+    for x, pet in enumerate(a):
+        print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
+            x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
 
     print('测试完成')
 
