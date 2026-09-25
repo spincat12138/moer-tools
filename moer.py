@@ -3252,6 +3252,77 @@ def _format_battle_rewards(rewards):
                     for item_id in sorted(totals))
 
 
+_BATTLE_START_TIMEOUT = 30
+_BATTLE_RESULT_TIMEOUT = 10
+_BATTLE_TRANSIENT_COMMANDS = frozenset((1012, 1306, 1308, 1313, 1316))
+
+
+def _recv_packet_before_deadline(session, deadline, timeout_message):
+    """在固定截止时间前读取一个完整帧。
+
+    deadline 由外层等待过程创建，避免非目标包到达后重置总超时。
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(timeout_message)
+    try:
+        return session.recv_packet(timeout=remaining)
+    except socket.timeout as exc:
+        raise TimeoutError(timeout_message) from exc
+
+
+def _receive_battle_until(session, commands, timeout, deferred_end_packets):
+    """在总时限内等待指定的战斗命令。"""
+    pending = set(commands)
+    parsed = []
+    battle_ended = False
+    deadline = time.monotonic() + timeout
+    command_text = '/'.join(str(command) for command in sorted(pending))
+    timeout_message = '等待战斗响应%s超时（%g秒）' % (command_text, timeout)
+
+    while pending:
+        response = _recv_packet_before_deadline(
+            session, deadline, timeout_message)
+        command_id = int.from_bytes(response[4:6], byteorder='big')
+        if command_id == 1310:
+            parsed.append((command_id, _parse_battle_action_return(response)))
+            pending.discard(command_id)
+        elif command_id == 1311:
+            parsed.append((command_id, _parse_battle_sync_info(response)))
+            pending.discard(command_id)
+        elif command_id == 1307:
+            parsed.append((command_id, None))
+            pending.discard(command_id)
+        elif command_id == 1300:
+            # BATTLE_INVITE 的 18 字节回包是错误确认，错误码位于
+            # 包尾四字节。200076（0x00030d8c）表示本次移动点
+            # 没有可遇到的黑化精灵。
+            error_id = int.from_bytes(response[14:18], byteorder='big') \
+                if len(response) >= 18 else None
+            if len(response) == 18 and error_id:
+                raise TimeoutError(
+                    '21102 1300 未命中隐形怪（error=%d）' % error_id)
+            parsed.append((command_id, None))
+            pending.discard(command_id)
+        elif command_id in pending:
+            parsed.append((command_id, None))
+            pending.discard(command_id)
+        elif command_id == 1003:
+            raise ConnectionError('服务器要求离开当前地图（1003）')
+        elif command_id in (1318, 1319):
+            deferred_end_packets.append(response)
+            battle_ended = True
+            pending.clear()
+        elif command_id in _BATTLE_TRANSIENT_COMMANDS:
+            # 资源加载、回合通知和角色标记等包只用于推进当前
+            # 战斗，后续请求不会消费，不放入持久待处理队列。
+            continue
+        else:
+            session._pending_by_command.setdefault(command_id, deque()).append(
+                response)
+
+    return parsed, battle_ended
+
 
 def _build_hidden_map_enter_packet(str2, map_id=0x54f7,
                                    entry_x=0xac, entry_y=0xcf,
@@ -3805,52 +3876,11 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
 
             def receive_until(commands, timeout=10):
                 """读取并解析服务器帧，直到收到指定命令集合。"""
-                pending = set(commands)
-                parsed = []
-                while pending:
-                    response = _get_socket_session(s).recv_packet(timeout=timeout)
-                    command_id = int.from_bytes(response[4:6], byteorder='big')
-                    if command_id == 1310:
-                        parsed.append((command_id, _parse_battle_action_return(response)))
-                        pending.discard(command_id)
-                    elif command_id == 1311:
-                        parsed.append((command_id, _parse_battle_sync_info(response)))
-                        pending.discard(command_id)
-                    elif command_id == 1307:
-                        parsed.append((command_id, None))
-                        pending.discard(command_id)
-                    elif command_id == 1300:
-                        # BATTLE_INVITE 的 18 字节回包是错误确认，错误码位于
-                        # 包尾四字节。200076（0x00030d8c）表示本次移动点
-                        # 没有可遇到的黑化精灵；不能把它暂存后继续盲等 1305，
-                        # 否则会把一次普通未命中误报成连接超时。
-                        error_id = int.from_bytes(response[14:18], byteorder='big') \
-                            if len(response) >= 18 else None
-                        if len(response) == 18 and error_id:
-                            raise TimeoutError(
-                                '21102 1300 未命中隐形怪（error=%d）' % error_id)
-                        parsed.append((command_id, None))
-                        pending.discard(command_id)
-                    elif command_id in pending:
-                        # 无需结构化解析的确认响应（例如 1165）。
-                        parsed.append((command_id, None))
-                        pending.discard(command_id)
-                    elif command_id in (1308, 1313, 1012):
-                        parsed.append((command_id, None))
-                    elif command_id == 1003:
-                        # LEAVE_MAP：战斗状态已被服务器清除，后续不会再有
-                        # 1310/1311；立即走外层重连流程，避免等待超时。
-                        raise ConnectionError('服务器要求离开当前地图（1003）')
-                    elif command_id in (1318, 1319):
-                        # 结算包可能紧跟最后一个回合包到达，不能放入
-                        # SocketSession 的待处理队列（recv_packet(None)
-                        # 不会主动消费该队列）。
-                        deferred_end_packets.append(response)
-                        battle_ended[0] = True
-                        pending.clear()
-                    else:
-                        # 其他响应保留给后续调用，避免无声丢包。
-                        _get_socket_session(s)._pending_by_command.setdefault(command_id, deque()).append(response)
+                parsed, ended = _receive_battle_until(
+                    _get_socket_session(s), commands, timeout,
+                    deferred_end_packets)
+                if ended:
+                    battle_ended[0] = True
                 return parsed
 
             # 1300 只是遇敌请求确认；客户端还会等待 1305
@@ -3871,8 +3901,7 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                          0, 0, 0, 0, 0, 0, 0, 1])
             # 新生巨石蟹地图的 1304/1305 触发流程较慢，服务端可能在
             # 1317 确认后持续发送 1306/1316 十几秒才发 1307。
-            start_timeout = 10
-            receive_until({1307}, timeout=start_timeout)
+            receive_until({1307}, timeout=_BATTLE_START_TIMEOUT)
 
             # 持续提交回合行动，直到服务器发来 1318 结算包。
             # 战斗可能在任意回合结束，不能按地点预设回合数截断。
@@ -3899,11 +3928,15 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
 
             # 1318 可能按掉落条目重复返回；1319 才是战斗结束通知。
             rewards = []
+            result_deadline = time.monotonic() + _BATTLE_RESULT_TIMEOUT
             while True:
                 if deferred_end_packets:
                     response = deferred_end_packets.pop(0)
                 else:
-                    response = _get_socket_session(s).recv_packet(timeout=10)
+                    response = _recv_packet_before_deadline(
+                        _get_socket_session(s), result_deadline,
+                        '等待战斗结算 1319 超时（%d秒）' %
+                        _BATTLE_RESULT_TIMEOUT)
                 command_id = int.from_bytes(response[4:6], byteorder='big')
                 if command_id == 1318:
                     rewards.append(_parse_battle_result_pve(response))
@@ -3916,6 +3949,8 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                     _parse_battle_action_return(response)
                 elif command_id == 1311:
                     _parse_battle_sync_info(response)
+                elif command_id in _BATTLE_TRANSIENT_COMMANDS:
+                    continue
                 else:
                     _get_socket_session(s)._pending_by_command.setdefault(command_id, deque()).append(response)
 
