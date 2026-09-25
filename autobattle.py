@@ -3,7 +3,7 @@ import logging
 import os
 import time
 
-from moer import get_account, login_taomi, battle
+from moer import battle, get_account, get_battle_wait_defaults, login_taomi
 
 
 # 配置日志
@@ -34,7 +34,7 @@ def _read_config_from_env():
 
     if uid < 0:
         raise ValueError('MOER_UID 不能为负数')
-    if position not in (1, 2, 3, 4):
+    if position not in (1, 2, 3, 4, 5, 6, 7):
         raise ValueError('MOER_POSITION 必须是 1、2、3 或 4')
 
     # 与 get_account() 保持一致：环境变量中的密码填写明文。
@@ -71,7 +71,8 @@ def run_battle():
         return
 
     s, s2, str2 = login_result
-    battle(s2, str2, position=position, login_socket=s,
+    turn_wait, end_wait = get_battle_wait_defaults(position)
+    battle(s2, str2, position=position, turn_wait=turn_wait, end_wait=end_wait, login_socket=s,
            reconnect_uid=uid, reconnect_pwd=pwd_md5)
 
 

@@ -350,7 +350,9 @@ def kaipai(uid, pwd, model, fwq=0):
                 exchangelb(s2, str2, type, count)
             if m == 123:
                 position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹，5伊影，6克拉斯岩洞外，7平原7区']))
-                battle(s2, str2, position, login_socket=s,  reconnect_fwq=fwq)
+                turn_wait, end_wait = prompt_battle_waits(position)
+                battle(s2, str2, position, turn_wait, end_wait,
+                       login_socket=s, reconnect_fwq=fwq)
             if m == 666:
                 tp_test(s2, str2)
         s.close()
@@ -1991,14 +1993,15 @@ def openjmbox(s, str2, id=300100):
             time.sleep(0.5)
 
 
-def openbook(s, str2):
+def openbook(s, str2):    
     packet = [0, 0, 0, 26, 4, 105, *str2, 0, 0, 5, 149, 0, 0, 0, 0, 0, 5, 87, 98, 0, 0, 0, 1]
     t1 = tuple(packet)
     req = struct.pack('26B', *t1)
     num = int(input('请输入开启数量'))
+    _fetch_item_from_store(s, str2, 350050, num)
     for i in range(num):
         s.send(req)
-        if i % 50 == 0:
+        if i % 100 == 0:
             time.sleep(0.5)
 
 
@@ -2214,8 +2217,8 @@ def kd(s, str2):
 
         num = 0
         for x, pet in enumerate(a):
-            print('您的第%d个宠物是：%s,等级是%d,转生次数%d,成长值%s' % (
-                x + 1, pet['nick'], pet['level'], pet['reincarnation_degree'], pet['grow_value']))
+            print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
+                x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['spirit']))
             if (pet['grow_value'] >= expectwx[0] or expectwx[0] == 0) and pet['hp_max'] >= expectwx[1] and pet['attack'] >= expectwx[2] and (
                     expectwx[3] == 0 or pet['defense'] <= expectwx[3]) and pet['speed'] >= expectwx[4] and (
                     expectwx[5] == 0 or pet['spirit'] <= expectwx[5]):
@@ -2960,8 +2963,46 @@ def _trigger_hidden_monster(s, str2, patrol_start, patrol_target,
         walk_step=patrol_walk_step)
 
 
-def battle(s, str2, position, login_socket=None, reconnect_uid=None,
-           reconnect_pwd=None, reconnect_fwq=None, hidden_map_id=21102):
+_BATTLE_WAIT_DEFAULTS = {
+    1: (0.05, 0.5),
+    2: (0.1, 4),
+    3: (0.05, 1),
+    4: (0.2, 2),
+    5: (0.2, 2),
+    6: (0.05, 0.5),
+    7: (0.05, 0.5),
+}
+
+
+def get_battle_wait_defaults(position):
+    """返回指定地点原有的回合和战斗结束等待时间。"""
+    try:
+        return _BATTLE_WAIT_DEFAULTS[position]
+    except KeyError as exc:
+        raise ValueError('不支持的战斗地点: %s' % position) from exc
+
+
+def _input_wait(prompt, default):
+    value = input('%s（默认 %s 秒，直接回车保持默认）: ' % (prompt, default)).strip()
+    if not value:
+        return default
+
+    wait = float(value)
+    if wait < 0:
+        raise ValueError('%s不能为负数' % prompt)
+    return wait
+
+
+def prompt_battle_waits(position):
+    """允许用户覆盖指定地点的默认战斗等待时间。"""
+    default_turn_wait, default_end_wait = get_battle_wait_defaults(position)
+    turn_wait = _input_wait('请输入每回合等待时间', default_turn_wait)
+    end_wait = _input_wait('请输入战斗结束等待时间', default_end_wait)
+    return turn_wait, end_wait
+
+
+def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_uid=None,
+           reconnect_pwd=None, reconnect_fwq=None):
     """执行自动战斗；断线重连时使用传入的账号凭据。"""
     global mmh, mmh_mm
     if reconnect_uid is None:
@@ -2989,13 +3030,7 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
     time.sleep(0.1)
 
     battle_load_wait = 0.05
-    turn_wait = 0.05
-    end_wait = 1
-
-
     if position == 1:
-        turn_wait = 0.05
-        end_wait = 0.5
         # 海滩
         packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
                     *[0x56, 0x55], 0, 0, 0, 0, 0, 0, *[0x0, 0x5a], 0, 0, *[0x01, 0x8e], 0, 0, 0, 0]
@@ -3004,8 +3039,6 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
         time.sleep(0.3)
 
     elif position == 2:
-        turn_wait = 0.1
-        end_wait = 4        
         # 草木树海
         packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
                     *[0x2c, 0xef], 0, 0, 0, 0, 0, 0, *[0x05, 0x66], 0, 0, *[0x03, 0xee], 0, 0, 0, 0]
@@ -3014,9 +3047,8 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
         time.sleep(0.3)
 
     elif position == 3:
-        turn_wait = 0.05
-        end_wait = 1
         # 吉普豆 3 号地道
+        hidden_map_id=21102
         hidden_route = _HIDDEN_PATROL_ROUTES.get(hidden_map_id)
         if hidden_route is None:
             raise ValueError('未配置隐形怪地图%d的传送和巡回点' % hidden_map_id)
@@ -3030,8 +3062,6 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
         time.sleep(0.3)
 
     elif position == 4:
-        turn_wait = 0.1
-        end_wait = 3
         # 传送新生巨石蟹
         packet = [0, 0, 0, 0x26, 3, 0xec, *str2, 0, 0, random.randint(5, 6),
             random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x75, 0xfb, 0,
@@ -3040,8 +3070,6 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
         time.sleep(0.3)
     
     elif position == 5:
-        turn_wait = 0.2
-        end_wait = 2
         # 传送yy
         packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
                     *[0x54, 0xC8], 0, 0, 0, 0, 0, 0, *[0x03, 0x20], 0, 0, *[0x03, 0x3e], 0, 0, 0, 0]
@@ -3050,8 +3078,6 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
         time.sleep(0.3)
     
     elif position == 6:
-        turn_wait = 0.05
-        end_wait = 0.5
         # 克拉斯岩洞外
         packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
                     *[0x56, 0x56], 0, 0, 0, 0, 0, 0, *[0x01, 0xae], 0, 0, *[0x00, 0xdc], 0, 0, 0, 0]
@@ -3060,8 +3086,6 @@ def battle(s, str2, position, login_socket=None, reconnect_uid=None,
         time.sleep(0.3)
 
     elif position == 7:
-        turn_wait = 0.05
-        end_wait = 0.5
         # 平原7
         packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
                     *[0x53, 0x3b], 0, 0, 0, 0, 0, 0, *[0x05, 0xfb], 0, 0, *[0x01, 0xdd], 0, 0, 0, 0]
@@ -3376,9 +3400,10 @@ def exchangelb(s, str2, type, count):
 
 def tp_test(s, str2):
 
-    equipment_info, _ = _get_equipment_bag_info(s, str2)
-    for equipment in equipment_info:
-        print(equipment['item_id'], equipment['instance_id'])
+    packet = [0, 0, 0, 26, 4, 105, *str2, 0, 0, random.randint(5, 6), random.randint(0, 255), 0, 0, 0, 0, 0, 5, 87, 98, 0, 0, 0, 1]
+    t1 = tuple(packet)
+    req = struct.pack('26B', *t1)
+    s.send(req)
 
     print('测试完成')
 
