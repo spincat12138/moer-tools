@@ -404,7 +404,7 @@ def kaipai(uid, pwd, model, fwq=0):
                 battle(s2, str2, position, turn_wait, end_wait,
                        login_socket=s, reconnect_fwq=current_fwq)
             if m == 666:
-                shared_socket_thread_test(s2, str2)
+                userinfo_test(s2, str2)
         s.close()
         s2.close()
         print('成功退出')
@@ -1597,6 +1597,25 @@ def _equipment_discard(s, str2, item_id, instance_id):
     s.send(req)
     print('装备“%s”已丢弃' % _get_item_name(item_id))
     time.sleep(0.1)
+
+
+def _repair_equipment(s, str2):
+    """修理人物当前装备栏中的全部装备。"""
+    user_info = _get_more_userinfo(s, str2)
+    for equipment in user_info['suit_items']:
+        instance_id = bytes(equipment['instance_id'])
+        item_id = int(equipment['item_id']).to_bytes(4, byteorder='big')
+        if len(instance_id) != 4:
+            raise ValueError('装备实例ID必须是4字节序列')
+
+        packet = [
+            0, 0, 0, 0x1E, 0x04, 0x5F, *str2,
+            0, 0, random.randint(5, 6), random.randint(0, 255),
+            0, 0, 0, 0, 0, 0, 0, 0,
+            *instance_id, *item_id,
+        ]
+        s.send(struct.pack('30B', *packet))
+        time.sleep(0.05)
 
 
 def bag_store_operations(s, str2):
@@ -2802,7 +2821,7 @@ def eatwz(s, str2, pet, num):
     req = struct.pack(*('26B',), *t1)
     s.send(req)
     xd_count += 1
-    time.sleep(0.2)
+    time.sleep(0.4)
 
 
 def _fetch_item_from_store(s, str2, item_id, quantity):
@@ -2868,6 +2887,8 @@ def kd(s, str2, switch_server):
             s.send(req)
         kd_count += batch_size
         kd_total_count += batch_size
+
+        time.sleep(0.5)
 
         pet_data = _get_pet_bag(s, str2)
         a = pet_data['pets']
@@ -3987,6 +4008,8 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                 print('%s:战斗结果%d' % (time.strftime('%H:%M:%S'), battle_result))
             reconnect_attempts = 0
 
+            _repair_equipment(s, str2)
+
             # 连续无间隔刷战斗会触发服务端连接保护；每场结束后留出
             # 一段冷却时间，避免下一场请求紧贴结算/刷新包。
             if battle_times % 50 == 0:
@@ -4229,6 +4252,11 @@ def shared_socket_thread_test(s, str2):
         thread.start()
     for thread in threads:
         thread.join()
+
+def userinfo_test(s, str2):
+    """测试获取用户信息。"""
+    user_info = _get_more_userinfo(s, str2)
+    print('用户信息：', user_info)
 
 if __name__ == '__main__':
     login_interface('account.txt')
