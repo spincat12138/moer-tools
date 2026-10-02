@@ -36,6 +36,11 @@ _PET_RESET_ATTR_POINTS_COMMAND = 1565
 _PET_RESET_ATTR_POINTS_ITEM_ID = 360010
 _ATTR_NAMES = ('体力', '力量', '耐力', '敏捷', '智力')
 _ATTR_KEYS = ('physique', 'strength', 'endurance', 'quick', 'intelligence')
+# 洗五项使用面板展示的战斗派生值：生命、攻击、防御、速度、魔力。
+_XD_VALUE_KEYS = ('hp_max', 'attack', 'defense', 'speed', 'mp_max')
+_XD_LOWER_BOUND_INDICES = (0, 1, 3)
+_KD_VALUE_KEYS = ('grow_value', 'hp_max', 'attack', 'defense', 'speed', 'mp_max')
+_KD_LOWER_BOUND_INDICES = (0, 1, 2, 4)
 _PET_POSITION_NAMES = {
     1: '宠物背包',
     2: '待命',
@@ -2659,6 +2664,31 @@ def _reset_xd_state():
     xd_max_count = 0
 
 
+def _is_threshold_target_reached(current, target, lower_bound_indices, upper_bound_indices):
+    """按目标中的上下限比较数值；目标为 0 的项不参与比较。"""
+    for index in lower_bound_indices:
+        if target[index] != 0 and current[index] < target[index]:
+            return False
+    for index in upper_bound_indices:
+        if target[index] != 0 and current[index] > target[index]:
+            return False
+    return True
+
+
+def _is_xd_target_reached(pet, target):
+    """判断洗五项目标；target 为生命值、攻击力、防御力、速度、魔力。"""
+    current = tuple(pet[key] for key in _XD_VALUE_KEYS)
+    return _is_threshold_target_reached(
+        current, target, _XD_LOWER_BOUND_INDICES, (2, 4))
+
+
+def _is_kd_target_reached(pet, target):
+    """判断开蛋目标；target 为成长、生命值、攻击力、防御力、速度、魔力。"""
+    current = tuple(pet[key] for key in _KD_VALUE_KEYS)
+    return _is_threshold_target_reached(
+        current, target, _KD_LOWER_BOUND_INDICES, (3, 5))
+
+
 def _get_continue_action(prompt):
     """读取继续、返回或换服操作。"""
     while True:
@@ -2740,11 +2770,9 @@ def xd(s, str2, xz, num, switch_server):
             continue
 
         if num == 3 or num == 4 or num == 2:
-            dqwx = [pet['physique'], pet['attack'], pet['defense'], pet['speed'], pet['intelligence']]
-
             # 用次数是否已设置判断是否为首次进入，允许五项目标全部填写 0。
             if xd_max_count == 0:
-                wx = [int(n) for n in input(['请输入五项:(体力/力量/耐力/速度/智力) 体力/力量/速度为不低于设定数值，耐力/防御/智力为不高于设定数值，0为不判断']).split(' ')]
+                wx = [int(n) for n in input(['请输入五项:(生命值/攻击力/防御力/速度/魔力) 生命值/攻击力/速度为不低于设定数值，防御力/魔力为不高于设定数值，0为不判断']).split(' ')]
                 if len(wx) != 5:
                     print('请输入5个用空格分隔的数值')
                     _reset_xd_state()
@@ -2757,17 +2785,7 @@ def xd(s, str2, xz, num, switch_server):
                 eatwz(s, str2, pet, num)
                 continue
 
-            is_satisfied = True
-            for i in [0, 1, 3]:
-                if wx[i] > dqwx[i] and wx[i] != 0:
-                    is_satisfied = False
-                    break
-            if wx[2] < dqwx[2] and wx[2] != 0:
-                is_satisfied = False
-            if wx[4] < dqwx[4] and wx[4] != 0:
-                is_satisfied = False
-
-            if is_satisfied:
+            if _is_xd_target_reached(pet, wx):
                 print('洗点成功，一共洗点%d次' % xd_count)
                 action = _get_xd_continue_action()
                 if action == '':
@@ -2899,9 +2917,7 @@ def kd(s, str2, switch_server):
         for x, pet in enumerate(a):
             print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
                 x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
-            if (pet['grow_value'] >= expectwx[0] or expectwx[0] == 0) and pet['hp_max'] >= expectwx[1] and pet['attack'] >= expectwx[2] and (
-                    expectwx[3] == 0 or pet['defense'] <= expectwx[3]) and pet['speed'] >= expectwx[4] and (
-                    expectwx[5] == 0 or pet['mp_max'] <= expectwx[5]):
+            if _is_kd_target_reached(pet, expectwx):
                 print('体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
                     pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],
                     pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
