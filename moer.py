@@ -3858,8 +3858,92 @@ _BATTLE_WAIT_DEFAULTS = {
     5: (0.2, 2),
     6: (0.05, 0.5),
     7: (0.05, 0.5),
-    8: (0.05, 1),
+    8: (0.1, 2),
 }
+
+_HOURLY_RELOGIN_LEAD_SECONDS = 10
+_HOURLY_RELOGIN_RESUME_SECONDS = 10
+
+
+class _HourlyReloginRequired(Exception):
+    """战斗进行中进入整点窗口，要求主动断开并重登。"""
+
+
+def _next_hour_timestamp(now=None):
+    """返回本地时区下一个整点的 Unix 时间戳。"""
+    if now is None:
+        now = time.time()
+    local_now = time.localtime(now)
+    return time.mktime((
+        local_now.tm_year,
+        local_now.tm_mon,
+        local_now.tm_mday,
+        local_now.tm_hour + 1,
+        0,
+        0,
+        -1,
+        -1,
+        -1,
+    ))
+
+
+def _seconds_until_next_hour(now=None):
+    current = time.time() if now is None else now
+    return max(0, _next_hour_timestamp(current) - current)
+
+
+def _hourly_relogin_due(now=None):
+    """判断是否已进入整点前 10 秒的主动重登窗口。"""
+    return _seconds_until_next_hour(now) <= _HOURLY_RELOGIN_LEAD_SECONDS
+
+
+def _close_socket_quietly(sock):
+    if sock is None:
+        return
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+def _relogin_at_hour_boundary(s, login_socket, uid, pwd, fwq=None):
+    """关闭当前会话，等待整点后 10 秒，再重新登录。"""
+    next_hour = _next_hour_timestamp()
+    _close_socket_quietly(s)
+    _close_socket_quietly(login_socket)
+
+    resume_at = next_hour + _HOURLY_RELOGIN_RESUME_SECONDS
+    wait_seconds = max(0, resume_at - time.time())
+    print('距离整点不足%d秒，已主动下线，整点后%d秒重新登录' % (
+        _HOURLY_RELOGIN_LEAD_SECONDS,
+        _HOURLY_RELOGIN_RESUME_SECONDS,
+    ))
+    if wait_seconds:
+        time.sleep(wait_seconds)
+
+    login_result = login_taomi(
+        uid,
+        pwd,
+        model=1,
+        fwq=fwq if fwq in range(1, 21) else 0,
+    )
+    if login_result is None:
+        raise ConnectionError('整点重登失败')
+    print('整点后%d秒重新登录成功，继续自动战斗' %
+          _HOURLY_RELOGIN_RESUME_SECONDS)
+    return login_result
+
+
+def _sleep_battle_cooldown(seconds):
+    """等待战斗冷却，同时允许在整点窗口到达时及时返回。"""
+    remaining = max(0, seconds)
+    while remaining > 0:
+        if _hourly_relogin_due():
+            return True
+        sleep_seconds = min(remaining, 1)
+        time.sleep(sleep_seconds)
+        remaining -= sleep_seconds
+    return _hourly_relogin_due()
 
 
 def get_battle_wait_defaults(position):
@@ -3899,6 +3983,25 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
         reconnect_pwd = mmh_mm
     battle_times = 0
     reconnect_attempts = 0
+
+    if _hourly_relogin_due():
+        login_socket, s, str2 = _relogin_at_hour_boundary(
+            s,
+            login_socket,
+            reconnect_uid,
+            reconnect_pwd,
+            reconnect_fwq,
+        )
+
+    def sleep_for_battle(seconds):
+        """战斗过程分段等待，进入整点窗口时立即中断。"""
+        remaining = max(0, seconds)
+        while remaining > 0:
+            if _hourly_relogin_due():
+                raise _HourlyReloginRequired
+            sleep_seconds = min(remaining, 1)
+            time.sleep(sleep_seconds)
+            remaining -= sleep_seconds
 
     pet_data = _get_pet_bag(s, str2)
     a = pet_data['pets']
@@ -3999,18 +4102,28 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
     hidden_position = None
     while True:
         try:
+            if _hourly_relogin_due():
+                login_socket, s, str2 = _relogin_at_hour_boundary(
+                    s,
+                    login_socket,
+                    reconnect_uid,
+                    reconnect_pwd,
+                    reconnect_fwq,
+                )
+                hidden_position = None
+
             # 星豆治疗
             packet = [0, 0, 0, 22, 4, 1, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 5]
             req = struct.pack(*('22B',), *packet)
             s.send(req)
-            time.sleep(0.1)
+            sleep_for_battle(0.1)
             if position == 1:
                 # 刷明雷
                 packet = [0, 0, 0, 0x1e, 0x05, 0x14, *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, 9, 0,
                           0, 0, 0, 0, 0, 0, 0]
                 req = struct.pack(*('30B',), *packet)
                 s.send(req)
-                time.sleep(0.1)
+                sleep_for_battle(0.1)
 
             elif position == 2:
                 # 刷食人花
@@ -4018,7 +4131,7 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                           0x1e, 0, 0, 0, 0]
                 req = struct.pack(*('26B',), *packet)
                 s.send(req)
-                time.sleep(0.1)
+                sleep_for_battle(0.1)
 
             elif (position == 3) or (position == 8):
                 hidden_result = _trigger_hidden_monster(
@@ -4033,34 +4146,34 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                 )
                 hidden_position = (
                     hidden_result.get('pos_x'), hidden_result.get('pos_y'))
-                time.sleep(0.1)
+                sleep_for_battle(0.1)
             elif position == 4:
                 # 2. 刷明雷战斗
                 packet = [0, 0, 0, 0x1a, 0x05, 0x18, *str2, 0, 0, random.randint(5, 6),
                         random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x09, 0xc7, 0, 0, 0, 0]
                 s.send(struct.pack('26B', *packet))
-                time.sleep(0.1)
+                sleep_for_battle(0.1)
 
             elif position == 5:
                 # 2. 刷明雷战斗
                 packet = [0, 0, 0, 0x1a, 0x05, 0x18, *str2, 0, 0, random.randint(5, 6),
                         random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x07, 0xda, 0, 0, 0, 0]
                 s.send(struct.pack('26B', *packet))
-                time.sleep(0.1)
+                sleep_for_battle(0.1)
             
             elif position == 6:
                 # 2. 刷明雷战斗
                 packet = [0, 0, 0, 0x1e, 0x05, 0x14, *str2, 0, 0, random.randint(5, 6),
                         random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x00, 0x0e, 0, 0, 0, 0, 0, 0, 0, 0]
                 s.send(struct.pack('30B', *packet))
-                time.sleep(0.1)
+                sleep_for_battle(0.1)
 
             elif position == 7:
                 # 2. 刷明雷战斗
                 packet = [0, 0, 0, 0x1e, 0x05, 0x14, *str2, 0, 0, random.randint(5, 6),
                         random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x00, 0x0b, 0, 0, 0, 0, 0, 0, 0, 0]
                 s.send(struct.pack('30B', *packet))
-                time.sleep(0.1)
+                sleep_for_battle(0.1)
 
             deferred_end_packets = []
             battle_ended = [False]
@@ -4070,9 +4183,22 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
 
             def receive_until(commands, timeout=10):
                 """读取并解析服务器帧，直到收到指定命令集合。"""
-                parsed, ended = _receive_battle_until(
-                    _get_socket_session(s), commands, timeout,
-                    deferred_end_packets)
+                if _hourly_relogin_due():
+                    raise _HourlyReloginRequired
+                until_window = (
+                    _seconds_until_next_hour() - _HOURLY_RELOGIN_LEAD_SECONDS)
+                receive_timeout = min(timeout, until_window)
+                if receive_timeout <= 0:
+                    raise _HourlyReloginRequired
+                limited_by_hourly_window = receive_timeout < timeout
+                try:
+                    parsed, ended = _receive_battle_until(
+                        _get_socket_session(s), commands, receive_timeout,
+                        deferred_end_packets)
+                except TimeoutError:
+                    if limited_by_hourly_window or _hourly_relogin_due():
+                        raise _HourlyReloginRequired
+                    raise
                 if ended:
                     battle_ended[0] = True
                 return parsed
@@ -4088,7 +4214,7 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                              random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0, battle_load_percent])
                 # 新生巨石蟹的触发/读秒阶段处理较慢，过快连续发送
                 # 1306 会被服务器按异常会话复位连接。
-                time.sleep(battle_load_wait)
+                sleep_for_battle(battle_load_wait)
 
             # BATTLE_INIT_STATE 1317，然后等待 BATTLE_BEGIN_NOTICE 1307。
             send_packet([0, 0, 0, 22, 5, 37, *str2, 0, 0, 5, random.randint(0, 255),
@@ -4105,11 +4231,11 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                 send_packet([0, 0, 0, 38, 5, 28, *str2, 0, 0, 5, random.randint(0, 255),
                              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                              255, 255, 255, 255, 0, 15, 66, 64, 0, 0, 0, 1])
-                time.sleep(turn_wait)
+                sleep_for_battle(turn_wait)
                 send_packet([0, 0, 0, 38, 5, 28, *str2, 0, 0, 5, random.randint(0, 255),
                              0, 0, 0, 0, *pet_id, 0, 0, 0, 0, 255, 255, 255, 255,
                              0, 15, 66, 64, 0, 0, 0, 1])
-                time.sleep(turn_wait)
+                sleep_for_battle(turn_wait)
                 # SET_ROLE_FLAG 1012：通知服务器本回合行动已提交。
                 send_packet([0, 0, 0, 26, 3, 244, *str2, 0, 0, 5, random.randint(0, 255),
                              0, 0, 0, 0, 0, 0, 0, 0x20, 0, 0, 0, 0])
@@ -4118,7 +4244,7 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                     break
                 # 下一回合不要紧贴上一回合响应发送，给服务端完成回合
                 # 状态切换的时间；战斗过程记录中动作间隔约为 50ms。
-                time.sleep(turn_wait)
+                sleep_for_battle(turn_wait)
 
             # 1318 可能按掉落条目重复返回；1319 才是战斗结束通知。
             rewards = []
@@ -4206,7 +4332,26 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                         _equipment_sell(s, str2, inid, equipment['instance_id'])
                     if (inid >= 80070 and inid <= 80077): # 绅士套装/淑女套装
                         _equipment_discard(s, str2, inid, equipment['instance_id'])
-            time.sleep(end_wait)
+            if _sleep_battle_cooldown(end_wait):
+                login_socket, s, str2 = _relogin_at_hour_boundary(
+                    s,
+                    login_socket,
+                    reconnect_uid,
+                    reconnect_pwd,
+                    reconnect_fwq,
+                )
+                hidden_position = None
+                reconnect_attempts = 0
+        except _HourlyReloginRequired:
+            login_socket, s, str2 = _relogin_at_hour_boundary(
+                s,
+                login_socket,
+                reconnect_uid,
+                reconnect_pwd,
+                reconnect_fwq,
+            )
+            hidden_position = None
+            reconnect_attempts = 0
         # SocketSession 在对端主动关闭时抛出 ConnectionError；与连接重置/
         # 中止一样重新登录，避免战斗循环因未捕获异常直接退出。
         except (ConnectionError, TimeoutError) as exc:
@@ -4215,14 +4360,14 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
             print('战斗连接异常：%s，%d秒后重新登录（第%d次）' %
                   (exc, delay, reconnect_attempts))
             for stale_socket in (s, login_socket):
-                if stale_socket is None:
-                    continue
-                try:
-                    stale_socket.close()
-                except OSError:
-                    pass
+                _close_socket_quietly(stale_socket)
             time.sleep(delay)
-            login_result = login_taomi(reconnect_uid, reconnect_pwd, model=1, fwq=reconnect_fwq if (reconnect_fwq in range(1,11)) else 0)
+            login_result = login_taomi(
+                reconnect_uid,
+                reconnect_pwd,
+                model=1,
+                fwq=reconnect_fwq if (reconnect_fwq in range(1, 11)) else 0,
+            )
             if login_result is None:
                 raise ConnectionError('战斗重连登录失败') from exc
             login_socket, s, str2 = login_result
