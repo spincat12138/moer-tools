@@ -404,7 +404,7 @@ def kaipai(uid, pwd, model, fwq=0):
             if m == 10:
                 reset_and_allocate_attr_points_menu(s2, str2)
             if m == 123:
-                position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹，5伊影，6克拉斯岩洞外，7平原7区']))
+                position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹，5伊影，6克拉斯岩洞外，7平原7区，8吉普豆2号地道']))
                 turn_wait, end_wait = prompt_battle_waits(position)
                 battle(s2, str2, position, turn_wait, end_wait,
                        login_socket=s, reconnect_fwq=current_fwq)
@@ -3618,6 +3618,15 @@ _HIDDEN_PATROL_ROUTES = {
         'walk_step': 30,
         'points': ((1179, 662), (1280, 900)),
     },
+    21103: {
+        # 1004 传送包中的地图编号和入口坐标；不是角色当前坐标。
+        'map_id': 0x526f,
+        'entry': (0x05a0, 0x0330),
+        # 两个固定点之间的实际移动步数。21102 抓包中对应路线约为
+        # 23--30；0 只适合首次贴近出生点，不适合战斗后的巡回。
+        'walk_step': 30,
+        'points': ((1440, 816), (1157, 672)),
+    },
 }
 
 
@@ -3849,6 +3858,7 @@ _BATTLE_WAIT_DEFAULTS = {
     5: (0.2, 2),
     6: (0.05, 0.5),
     7: (0.05, 0.5),
+    8: (0.05, 1),
 }
 
 
@@ -3971,6 +3981,21 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
         s.send(req)
         time.sleep(0.3)
 
+    elif position == 8:
+        # 吉普豆 2 号地道
+        hidden_map_id=21103
+        hidden_route = _HIDDEN_PATROL_ROUTES.get(hidden_map_id)
+        if hidden_route is None:
+            raise ValueError('未配置隐形怪地图%d的传送和巡回点' % hidden_map_id)
+
+        entry_x, entry_y = hidden_route['entry']
+        req = _build_hidden_map_enter_packet(
+            str2, hidden_route['map_id'], entry_x, entry_y)
+        s.send(req)
+        patrol_start, patrol_target = hidden_route['points']
+
+        time.sleep(0.3)
+
     hidden_position = None
     while True:
         try:
@@ -3995,7 +4020,7 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                 s.send(req)
                 time.sleep(0.1)
 
-            elif position == 3:
+            elif (position == 3) or (position == 8):
                 hidden_result = _trigger_hidden_monster(
                     s,
                     str2,
