@@ -409,7 +409,7 @@ def kaipai(uid, pwd, model, fwq=0):
                 battle(s2, str2, position, turn_wait, end_wait,
                        login_socket=s, reconnect_fwq=current_fwq)
             if m == 666:
-                userinfo_test(s2, str2)
+                wpe_test(s2, str2)
         s.close()
         s2.close()
         print('成功退出')
@@ -4401,10 +4401,32 @@ def shared_socket_thread_test(s, str2):
     for thread in threads:
         thread.join()
 
-def userinfo_test(s, str2):
-    """测试获取用户信息。"""
-    user_info = _get_more_userinfo(s, str2)
-    print('用户信息：', user_info)
+def wpe_test(s, str2):
+    """通过 1125 协议获取指定数量的指定物品。"""
+    try:
+        item_code = int(input('请输入物品代码（十进制，如 300080）：').strip())
+        quantity = int(input('请输入物品数量（十进制）：').strip())
+    except ValueError:
+        print('物品代码和数量必须是整数')
+        return
+
+    if not 0 < item_code <= 0xFFFFFFFF:
+        print('物品代码必须在 1 到 4294967295 范围内')
+        return
+    if not 0 < quantity <= 0xFFFFFFFF:
+        print('物品数量必须在 1 到 FFFFFFFF 范围内')
+        return
+
+    item_code_bytes = item_code.to_bytes(4, byteorder='big')
+    encoded_quantity = (0xFFFFFFFF - quantity).to_bytes(4, byteorder='big')
+    packet = [
+        0, 0, 0, 0x1A, 0x04, 0x65, *str2,
+        0, 0, 0x06, 0xB5, 0, 0, 0, 0,
+        *item_code_bytes, *encoded_quantity,
+    ]
+    req = struct.pack('26B', *packet)
+    s.send(req)
+
 
 if __name__ == '__main__':
     login_interface('account.txt')
