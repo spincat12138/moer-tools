@@ -2323,17 +2323,149 @@ def excrystal(s, str2):
     print('兑换成功')
 
 
+_JMBOX_BATCH_SIZE = 99
+_MAGIC_CRYSTAL_ID = 290012
+_JMBOX_EXCHANGE_NPC_ID = 0x27
+_JMBOX_EXCHANGE_ITEM_INDEX = 0x46
+_EXCHANGE_BLESS_GIFT_COMMAND = 1127
+_JMBOX_REWARD_ITEM_IDS = (
+    360040, 350051, 350050, 370002, 370012, 370022, 370032, 370042,
+    370052, 300101, 300102, 300103, 300104, 300105, 300106, 300107,
+    300108,
+)
+_JMBOX_TARGET_ITEM_IDS = frozenset(range(300101, 300109))
+_JMBOX_TARGET_LIMIT = 99
+_JMBOX_TARGET_STORE_QUANTITY = 98
+
+
+def _parse_exchange_bless_gift_response(packet):
+    """解析 1127 回包，返回错误码和服务端给出的奖励信息。
+
+    反编译的 ExchangeItemOpenGiftBoxProtocol 依次读取：
+    exchangeRandomID(int)、奖励数量(uint)、以及每个奖励的 goodID(uint)。
+    TMF 头部 14..17 字节是错误码；失败时通常只有 18 字节头部。
+    """
+    if len(packet) < _TMF_HEADER_SIZE:
+        raise ValueError('1127协议回包头不完整')
+
+    packet_length, command_id = struct.unpack_from('>IH', packet)
+    if packet_length != len(packet):
+        raise ValueError(
+            '1127协议回包长度不一致（声明%d，实际%d）' %
+            (packet_length, len(packet)))
+    if command_id != _EXCHANGE_BLESS_GIFT_COMMAND:
+        raise ValueError(
+            '协议命令不匹配（期望%d，实际%d）' %
+            (_EXCHANGE_BLESS_GIFT_COMMAND, command_id))
+
+    error_code = struct.unpack_from('>I', packet, 14)[0]
+    if error_code:
+        if len(packet) != _TMF_HEADER_SIZE:
+            raise ValueError('1127协议错误回包不应包含额外负载')
+        return {
+            'success': False,
+            'error_code': error_code,
+            'exchange_random_id': None,
+            'item_ids': (),
+        }
+
+    payload = packet[_TMF_HEADER_SIZE:]
+    if len(payload) < 8:
+        raise ValueError('1127协议成功回包负载不完整')
+
+    exchange_random_id, item_count = struct.unpack_from('>iI', payload)
+    expected_payload_size = 8 + item_count * 4
+    if len(payload) != expected_payload_size:
+        raise ValueError(
+            '1127协议奖励数量与负载长度不一致（数量%d，负载%d）' %
+            (item_count, len(payload)))
+
+    item_ids = (struct.unpack_from('>%dI' % item_count, payload, 8)
+                if item_count else ())
+    return {
+        'success': True,
+        'error_code': 0,
+        'exchange_random_id': exchange_random_id,
+        'item_ids': item_ids,
+    }
+
+
 def openjmbox(s, str2, id=300100):
-    id = hex(id)[2:].zfill(6)
-    packet = [0, 0, 0, 22, 4, 103, *str2, 0, 0, 5, 251, 0, 0, 0, 0, 0, int(id[0:2], base=16), int(id[2:4], base=16),
-              int(id[4:6], base=16)]
+    """兑换并逐个开启吉姆宝箱，失败开箱不消耗本地箱子计数。"""
+    print("说明：自动兑换吉姆宝箱并开启，可以通过堆满背包的方式卡职业箱子。\n使用方法：使用前清空收集品背包和可消耗品背包；在收集品中放入99个魔力水晶，并用其他吉姆宝箱中无法开出的物品填充满；在可消耗品中放入1个需要卡的职业箱子，留一个空位，然后其余用吉姆宝箱中无法开出的物品填充满\n")
+    try:
+        target_quantity = int(input('请输入要成功开启的数量'))
+    except ValueError:
+        print('开启数量必须是整数')
+        return
+    if target_quantity <= 0:
+        print('开启数量必须大于0')
+        return
+
+    item_id_bytes = int(id).to_bytes(4, byteorder='big')
+    packet = [0, 0, 0, 22, 4, 103, *str2, 0, 0, 5, 251, 0, 0, 0, 0,
+              *item_id_bytes]
     t1 = tuple(packet)
     req = struct.pack(*('22B',), *t1)
-    num = int(input('请输入开启数量'))
-    for i in range(num):
+
+    opened_quantity = 0
+    attempt_quantity = 0
+    remaining_boxes = 0
+    target_item_counts = {
+        item_id: 1 for item_id in _JMBOX_TARGET_ITEM_IDS
+    }
+    while opened_quantity < target_quantity:
+        if remaining_boxes == 0:
+            # _fetch_item_from_store(
+            #     s, str2, _MAGIC_CRYSTAL_ID, _JMBOX_BATCH_SIZE)
+            _exchange_item(
+                s, str2, _JMBOX_EXCHANGE_NPC_ID,
+                _JMBOX_EXCHANGE_ITEM_INDEX, _JMBOX_BATCH_SIZE)
+            _fetch_item_from_store(
+                s, str2, _MAGIC_CRYSTAL_ID, _JMBOX_BATCH_SIZE)
+            remaining_boxes = _JMBOX_BATCH_SIZE
+
         s.send(req)
-        if i % 50 == 0:
-            time.sleep(0.5)
+        response = _receive_bag_response(
+            s, str2, _EXCHANGE_BLESS_GIFT_COMMAND, '吉姆宝箱开启结果')
+        result = _parse_exchange_bless_gift_response(response)
+        attempt_quantity += 1
+
+        if result['success']:
+            reward_index = result['exchange_random_id']
+            reward_item_id = None
+            if 0 <= reward_index < len(_JMBOX_REWARD_ITEM_IDS):
+                reward_item_id = _JMBOX_REWARD_ITEM_IDS[reward_index]
+                reward_name = _get_item_name(reward_item_id)
+            else:
+                reward_name = '未知奖励（索引%d）' % reward_index
+            opened_quantity += 1
+            remaining_boxes -= 1
+            print(
+                '第%d次开箱：成功，获得%s（索引%d），已成功开启%d/%d，'
+                '本批宝箱剩余%d个' %
+                (attempt_quantity, reward_name, reward_index,
+                 opened_quantity, target_quantity, remaining_boxes))
+
+            if reward_item_id in _JMBOX_TARGET_ITEM_IDS:
+                target_item_counts[reward_item_id] += 1
+                current_count = target_item_counts[reward_item_id]
+                if current_count == _JMBOX_TARGET_LIMIT:
+                    _prop_backto_store(
+                        s, str2, reward_item_id,
+                        _JMBOX_TARGET_STORE_QUANTITY)
+                    target_item_counts[reward_item_id] = 1
+                    print(
+                        '%s累计达到%d个，已放回仓库%d个，背包保留1个' %
+                        (_get_item_name(reward_item_id),
+                         _JMBOX_TARGET_LIMIT,
+                         _JMBOX_TARGET_STORE_QUANTITY))
+        else:
+            print(
+                '第%d次开箱：失败（错误码%d），已成功开启%d/%d，'
+                '本批宝箱剩余%d个' %
+                (attempt_quantity, result['error_code'], opened_quantity,
+                 target_quantity, remaining_boxes))
 
 
 def openbook(s, str2):    
@@ -2906,7 +3038,7 @@ def kd(s, str2, switch_server):
         kd_count += batch_size
         kd_total_count += batch_size
 
-        time.sleep(0.5)
+        time.sleep(1)
 
         pet_data = _get_pet_bag(s, str2)
         a = pet_data['pets']
