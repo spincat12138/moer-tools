@@ -1,6 +1,9 @@
 from urllib import parse
 import time, struct, random, socket, hashlib, threading, weakref
 from collections import deque
+from datetime import datetime
+from pathlib import Path
+import re
 
 from uncompyle6.parsers.reducecheck import tryexcept
 
@@ -41,6 +44,8 @@ _XD_VALUE_KEYS = ('hp_max', 'attack', 'defense', 'speed', 'mp_max')
 _XD_LOWER_BOUND_INDICES = (0, 1, 3)
 _KD_VALUE_KEYS = ('grow_value', 'hp_max', 'attack', 'defense', 'speed', 'mp_max')
 _KD_LOWER_BOUND_INDICES = (0, 1, 2, 4)
+_active_pet_result_key = None
+_active_pet_result_path = None
 _PET_POSITION_NAMES = {
     1: '宠物背包',
     2: '待命',
@@ -52,6 +57,37 @@ _PET_POSITION_NAMES = {
 def _get_item_name(item_id):
     """返回 Item ID 对应的中文名，并明确标记资料中缺失的 ID。"""
     return _ITEM_NAMES.get(item_id, '未知物品（Item ID：%d）' % item_id)
+
+
+def _save_pet_result(pet, pet_number, session_key):
+    """保存单只宠物属性；同一连续记录流追加到同一 TXT 文件。"""
+    global _active_pet_result_key
+    global _active_pet_result_path
+
+    content = (
+        '您的第%d个宠物是：%s,成长值%s\n'
+        '体力%s   生命值%s\n'
+        '力量%s  攻击力%s\n'
+        '耐力%s  防御%s\n'
+        '敏捷%s  速度%s\n'
+        '智力%s  魔力%s\n'
+    ) % (
+        pet_number, pet['nick'], pet['grow_value'], pet['physique'], pet['hp_max'],
+        pet['strength'], pet['attack'], pet['endurance'], pet['defense'],
+        pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max'])
+    safe_nick = re.sub(r'[<>:"/\\|?*]', '_', pet['nick']).strip(' .') or '宠物'
+    if session_key != _active_pet_result_key:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        output_dir = Path(__file__).resolve().parent / 'pet_results'
+        output_dir.mkdir(exist_ok=True)
+        _active_pet_result_path = output_dir / ('%s_%s.txt' % (timestamp, safe_nick))
+        _active_pet_result_key = session_key
+        _active_pet_result_path.write_text(content, encoding='utf-8')
+    else:
+        with _active_pet_result_path.open('a', encoding='utf-8') as result_file:
+            result_file.write('\n' + content)
+    output_path = _active_pet_result_path
+    # print('宠物结果已保存：%s' % output_path)
 
 
 class SocketSession:
@@ -2857,6 +2893,7 @@ def xd(s, str2, xz, num, switch_server):
     # xz == -1 只出现在一次新的洗点流程开始时；递归刷新宠物数据时保留状态。
     if xz == -1:
         _reset_xd_state()
+    pending_result = False
 
     while True:
         pet_data = _load_xd_pets(s, str2)
@@ -2881,6 +2918,9 @@ def xd(s, str2, xz, num, switch_server):
             xz = pet_number - 1
 
         pet = a[xz]
+        if pending_result:
+            _save_pet_result(pet, xz + 1, ('xd', tuple(pet['pet_id_bytes'])))
+            pending_result = False
         print('成长%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
             pet['grow_value'], pet['physique'], pet['hp_max'], pet['strength'], pet['attack'],
             pet['endurance'], pet['defense'], pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
@@ -2899,6 +2939,7 @@ def xd(s, str2, xz, num, switch_server):
                 _reset_xd_state()
                 return False
             eatwz(s, str2, pet, num)
+            pending_result = True
             continue
 
         if num == 3 or num == 4 or num == 2:
@@ -2915,6 +2956,7 @@ def xd(s, str2, xz, num, switch_server):
                     _reset_xd_state()
                     return False
                 eatwz(s, str2, pet, num)
+                pending_result = True
                 continue
 
             if _is_xd_target_reached(pet, wx):
@@ -2923,6 +2965,7 @@ def xd(s, str2, xz, num, switch_server):
                 if action == '':
                     xd_count = 0
                     eatwz(s, str2, pet, num)
+                    pending_result = True
                     continue
                 if action == '886':
                     s, str2 = switch_server()
@@ -2936,6 +2979,7 @@ def xd(s, str2, xz, num, switch_server):
                 if action == '':
                     xd_count = 0
                     eatwz(s, str2, pet, num)
+                    pending_result = True
                     continue
                 if action == '886':
                     s, str2 = switch_server()
@@ -2946,6 +2990,7 @@ def xd(s, str2, xz, num, switch_server):
 
             print('不满足')
             eatwz(s, str2, pet, num)
+            pending_result = True
             continue
 
         print('丸子编号不存在')
@@ -3047,6 +3092,7 @@ def kd(s, str2, switch_server):
 
         num = 0
         for x, pet in enumerate(a):
+            _save_pet_result(pet, x + 1, ('kd', petid))
             print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
                 x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
             if _is_kd_target_reached(pet, expectwx):
@@ -4077,9 +4123,9 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
         time.sleep(0.3)
 
     elif position == 7:
-        # 平原7
+        # 平原1
         packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
-                    *[0x53, 0x3b], 0, 0, 0, 0, 0, 0, *[0x05, 0xfb], 0, 0, *[0x01, 0xdd], 0, 0, 0, 0]
+                    *[0x53, 0x35], 0, 0, 0, 0, 0, 0, *[0x05, 0xfb], 0, 0, *[0x01, 0xdd], 0, 0, 0, 0]
         req = struct.pack(*('38B',), *packet)
         s.send(req)
         time.sleep(0.3)
