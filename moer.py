@@ -439,6 +439,8 @@ def kaipai(uid, pwd, model, fwq=0):
                 exchangelb(s2, str2, type, count)
             if m == 10:
                 reset_and_allocate_attr_points_menu(s2, str2)
+            if m == 11:
+                fpexp099(s2, str2)
             if m == 123:
                 position = int(input(['请输入地点：1海滩，2草木树海，3吉普豆3号地道，4新生巨石蟹，5伊影，6克拉斯岩洞外，7平原7区，8吉普豆2号地道']))
                 turn_wait, end_wait = prompt_battle_waits(position)
@@ -2829,10 +2831,19 @@ def _is_threshold_target_reached(current, target, lower_bound_indices, upper_bou
 
 
 def _is_xd_target_reached(pet, target):
-    """判断洗五项目标；target 为生命值、攻击力、防御力、速度、魔力。"""
-    current = tuple(pet[key] for key in _XD_VALUE_KEYS)
+    """判断洗点目标；支持五项或成长加五项两种目标格式。"""
+    if len(target) == 6:
+        # 大丸子目标与开蛋目标相同：成长、生命、攻击、速度为下限，
+        # 防御、魔力为上限；目标为 0 的项目不参与比较。
+        current = tuple(pet[key] for key in _KD_VALUE_KEYS)
+        lower_bound_indices = _KD_LOWER_BOUND_INDICES
+        upper_bound_indices = (3, 5)
+    else:
+        current = tuple(pet[key] for key in _XD_VALUE_KEYS)
+        lower_bound_indices = _XD_LOWER_BOUND_INDICES
+        upper_bound_indices = (2, 4)
     return _is_threshold_target_reached(
-        current, target, _XD_LOWER_BOUND_INDICES, (2, 4))
+        current, target, lower_bound_indices, upper_bound_indices)
 
 
 def _is_kd_target_reached(pet, target):
@@ -2928,11 +2939,27 @@ def xd(s, str2, xz, num, switch_server):
             continue
 
         if num == 3 or num == 4 or num == 2:
-            # 用次数是否已设置判断是否为首次进入，允许五项目标全部填写 0。
+            # 用次数是否已设置判断是否为首次进入，允许目标全部填写 0。
             if xd_max_count == 0:
-                wx = [int(n) for n in input(['请输入五项:(生命值/攻击力/防御力/速度/魔力) 生命值/攻击力/速度为不低于设定数值，防御力/魔力为不高于设定数值，0为不判断']).split(' ')]
-                if len(wx) != 5:
-                    print('请输入5个用空格分隔的数值')
+                if num == 2:
+                    target_prompt = ('请输入成长+五项:(成长/生命值/攻击力/防御力/速度/魔力) '
+                                     '成长/生命值/攻击力/速度为不低于设定数值，'
+                                     '防御力/魔力为不高于设定数值，0为不判断')
+                    target_length = 6
+                else:
+                    target_prompt = ('请输入五项:(生命值/攻击力/防御力/速度/魔力) '
+                                     '生命值/攻击力/速度为不低于设定数值，'
+                                     '防御力/魔力为不高于设定数值，0为不判断')
+                    target_length = 5
+                target_values = input([target_prompt]).split()
+                if len(target_values) != target_length:
+                    print('请输入%d个用空格分隔的数值' % target_length)
+                    _reset_xd_state()
+                    return False
+                try:
+                    wx = [int(value) for value in target_values]
+                except ValueError:
+                    print('目标数值必须是整数')
                     _reset_xd_state()
                     return False
                 xd_max_count = int(input('请输入洗点次数'))
@@ -4628,6 +4655,47 @@ def wpe_test(s, str2):
     req = struct.pack('26B', *packet)
     s.send(req)
 
+
+def fpexp099(s, str2):
+    pet_data = _get_pet_bag(s, str2)
+    pets = pet_data['pets']
+    if not pets:
+        print('宠物背包中没有可选择的宠物')
+        return
+
+    print('共有%d只宠物' % len(pets))
+    for index, listed_pet in enumerate(pets, start=1):
+        print('您的第%d个宠物是：%s,等级是%d,转生次数%d,已分配经验%d,转生所需经验%d' % (
+            index, listed_pet['nick'], listed_pet['level'], listed_pet['reincarnation_degree'],
+            listed_pet['experience'],
+            jsexp(listed_pet['reincarnation_degree'], 0) - listed_pet['experience']))
+
+    while True:
+        raw_value = input('[请选择要升级到0转99级的精灵，按0退出]').strip()
+        try:
+            pet_number = int(raw_value)
+        except ValueError:
+            print('宠物编号必须是整数')
+            continue
+        if pet_number == 0:
+            return
+        if 1 <= pet_number <= len(pets):
+            break
+        print('宠物编号不存在')
+
+    remaining_exp = 60796450
+    max_packet_exp = 999999
+    selected_pet = pets[pet_number - 1]
+    pet_id = selected_pet['pet_id_bytes']
+    packet_count = 0
+    while remaining_exp > 0:
+        packet_exp = min(remaining_exp, max_packet_exp)
+        fpexp(packet_exp, pet_id, str2, s)
+        remaining_exp -= packet_exp
+        packet_count += 1
+        if packet_count % 10 == 0 and remaining_exp > 0:
+            time.sleep(0.25)
+    print('已向宠物%s分配60796449经验' % selected_pet['nick'])
 
 if __name__ == '__main__':
     login_interface('account.txt')
