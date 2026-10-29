@@ -2370,8 +2370,6 @@ _JMBOX_REWARD_ITEM_IDS = (
     300108,
 )
 _JMBOX_TARGET_ITEM_IDS = frozenset(range(300101, 300109))
-_JMBOX_TARGET_LIMIT = 99
-_JMBOX_TARGET_STORE_QUANTITY = 98
 
 
 def _parse_exchange_bless_gift_response(packet):
@@ -2447,9 +2445,6 @@ def openjmbox(s, str2, id=300100):
     opened_quantity = 0
     attempt_quantity = 0
     remaining_boxes = 0
-    target_item_counts = {
-        item_id: 1 for item_id in _JMBOX_TARGET_ITEM_IDS
-    }
     while opened_quantity < target_quantity:
         if remaining_boxes == 0:
             # _fetch_item_from_store(
@@ -2474,33 +2469,23 @@ def openjmbox(s, str2, id=300100):
                 reward_item_id = _JMBOX_REWARD_ITEM_IDS[reward_index]
                 reward_name = _get_item_name(reward_item_id)
             else:
-                reward_name = '未知奖励（索引%d）' % reward_index
+                reward_name = '未知奖励'
             opened_quantity += 1
             remaining_boxes -= 1
             print(
-                '第%d次开箱：成功，获得%s（索引%d），已成功开启%d/%d，'
+                '第%d次开箱：成功，获得%s，已成功开启%d/%d，'
                 '本批宝箱剩余%d个' %
-                (attempt_quantity, reward_name, reward_index,
+                (attempt_quantity, reward_name,
                  opened_quantity, target_quantity, remaining_boxes))
 
             if reward_item_id in _JMBOX_TARGET_ITEM_IDS:
-                target_item_counts[reward_item_id] += 1
-                current_count = target_item_counts[reward_item_id]
-                if current_count == _JMBOX_TARGET_LIMIT:
-                    _prop_backto_store(
-                        s, str2, reward_item_id,
-                        _JMBOX_TARGET_STORE_QUANTITY)
-                    target_item_counts[reward_item_id] = 1
-                    print(
-                        '%s累计达到%d个，已放回仓库%d个，背包保留1个' %
-                        (_get_item_name(reward_item_id),
-                         _JMBOX_TARGET_LIMIT,
-                         _JMBOX_TARGET_STORE_QUANTITY))
+                _prop_backto_store(s, str2, reward_item_id, 1)
+                print('%s已立即放回仓库1个' % _get_item_name(reward_item_id))
         else:
             print(
-                '第%d次开箱：失败（错误码%d），已成功开启%d/%d，'
+                '第%d次开箱：失败，已成功开启%d/%d，'
                 '本批宝箱剩余%d个' %
-                (attempt_quantity, result['error_code'], opened_quantity,
+                (attempt_quantity, opened_quantity,
                  target_quantity, remaining_boxes))
 
 
