@@ -13,6 +13,7 @@ cz = 0
 wx = [0, 0, 0, 0, 0]
 xd_count = 0
 xd_max_count = 0
+xd_mode = None
 mmh = 0
 mmh_mm = 0
 
@@ -42,6 +43,7 @@ _ATTR_KEYS = ('physique', 'strength', 'endurance', 'quick', 'intelligence')
 # 洗五项使用面板展示的战斗派生值：生命、攻击、防御、速度、魔力。
 _XD_VALUE_KEYS = ('hp_max', 'attack', 'defense', 'speed', 'mp_max')
 _XD_LOWER_BOUND_INDICES = (0, 1, 3)
+_XD_BASE_VALUE_KEYS = ('physique', 'strength', 'endurance', 'quick', 'intelligence')
 _KD_VALUE_KEYS = ('grow_value', 'hp_max', 'attack', 'defense', 'speed', 'mp_max')
 _KD_LOWER_BOUND_INDICES = (0, 1, 2, 4)
 _active_pet_result_key = None
@@ -405,7 +407,7 @@ def kaipai(uid, pwd, model, fwq=0):
         m = 1
         while m != 0:
             m = int(input(
-                ['请输入要使用的功能：1砸罐子,2分经验,3开书/丸子包/箱子,4背包/仓库操作,5丢仓库宠物,6洗点,7开蛋,8兑换水晶,9兑换奖牌/礼物,10一键洗点/加点,0退出']))
+                ['请输入要使用的功能：1砸罐子,2分经验,3开书/丸子包/箱子,4背包/仓库操作,5丢仓库宠物,6洗点,7开蛋,8兑换水晶,9兑换奖牌/礼物,10一键洗点/加点,11一键升级0转99级,0退出']))
             if m == 1:
                 zgz(s2, str2)
             if m == 2:
@@ -2456,6 +2458,8 @@ def openjmbox(s, str2, id=300100):
                 _JMBOX_EXCHANGE_ITEM_INDEX, _JMBOX_BATCH_SIZE)
             _fetch_item_from_store(
                 s, str2, _MAGIC_CRYSTAL_ID, _JMBOX_BATCH_SIZE)
+            # _fetch_item_from_store(
+            #     s, str2, 300100, _JMBOX_BATCH_SIZE)
             remaining_boxes = _JMBOX_BATCH_SIZE
 
         s.send(req)
@@ -2812,11 +2816,12 @@ def reset_and_allocate_attr_points_menu(s, str2):
 
 def _reset_xd_state():
     """清理一次洗点流程的临时状态，避免下一次洗点继承上次目标。"""
-    global cz, wx, xd_count, xd_max_count
+    global cz, wx, xd_count, xd_max_count, xd_mode
     cz = 0
     wx = [0, 0, 0, 0, 0]
     xd_count = 0
     xd_max_count = 0
+    xd_mode = None
 
 
 def _is_threshold_target_reached(current, target, lower_bound_indices, upper_bound_indices):
@@ -2830,18 +2835,28 @@ def _is_threshold_target_reached(current, target, lower_bound_indices, upper_bou
     return True
 
 
-def _is_xd_target_reached(pet, target):
+def _is_xd_target_reached(pet, target, mode='derived'):
     """判断洗点目标；支持五项或成长加五项两种目标格式。"""
     if len(target) == 6:
-        # 大丸子目标与开蛋目标相同：成长、生命、攻击、速度为下限，
-        # 防御、魔力为上限；目标为 0 的项目不参与比较。
-        current = tuple(pet[key] for key in _KD_VALUE_KEYS)
-        lower_bound_indices = _KD_LOWER_BOUND_INDICES
-        upper_bound_indices = (3, 5)
+        if mode == 'base':
+            current = (pet['grow_value'],) + tuple(
+                pet[key] for key in _XD_BASE_VALUE_KEYS)
+            lower_bound_indices = tuple(range(6))
+            upper_bound_indices = ()
+        else:
+            # 派生属性模式沿用开蛋目标的上下限方向。
+            current = tuple(pet[key] for key in _KD_VALUE_KEYS)
+            lower_bound_indices = _KD_LOWER_BOUND_INDICES
+            upper_bound_indices = (3, 5)
     else:
-        current = tuple(pet[key] for key in _XD_VALUE_KEYS)
-        lower_bound_indices = _XD_LOWER_BOUND_INDICES
-        upper_bound_indices = (2, 4)
+        if mode == 'base':
+            current = tuple(pet[key] for key in _XD_BASE_VALUE_KEYS)
+            lower_bound_indices = tuple(range(5))
+            upper_bound_indices = ()
+        else:
+            current = tuple(pet[key] for key in _XD_VALUE_KEYS)
+            lower_bound_indices = _XD_LOWER_BOUND_INDICES
+            upper_bound_indices = (2, 4)
     return _is_threshold_target_reached(
         current, target, lower_bound_indices, upper_bound_indices)
 
@@ -2885,6 +2900,7 @@ def xd(s, str2, xz, num, switch_server):
     global wx
     global xd_count
     global xd_max_count
+    global xd_mode
 
     # xz == -1 只出现在一次新的洗点流程开始时；递归刷新宠物数据时保留状态。
     if xz == -1:
@@ -2941,15 +2957,32 @@ def xd(s, str2, xz, num, switch_server):
         if num == 3 or num == 4 or num == 2:
             # 用次数是否已设置判断是否为首次进入，允许目标全部填写 0。
             if xd_max_count == 0:
+                if xd_mode is None:
+                    mode_choice = input(
+                        '请选择判断属性：1.体力/力量/耐力/敏捷/智力，'
+                        '2.生命值/攻击力/防御力/速度/魔力：').strip()
+                    if mode_choice not in ('1', '2'):
+                        print('判断属性模式不存在')
+                        _reset_xd_state()
+                        return False
+                    xd_mode = 'base' if mode_choice == '1' else 'derived'
                 if num == 2:
-                    target_prompt = ('请输入成长+五项:(成长/生命值/攻击力/防御力/速度/魔力) '
-                                     '成长/生命值/攻击力/速度为不低于设定数值，'
-                                     '防御力/魔力为不高于设定数值，0为不判断')
+                    if xd_mode == 'base':
+                        target_prompt = ('请输入成长+五项:(成长/体力/力量/耐力/敏捷/智力) '
+                                         '各项为不低于设定数值，0为不判断')
+                    else:
+                        target_prompt = ('请输入成长+五项:(成长/生命值/攻击力/防御力/速度/魔力) '
+                                         '成长/生命值/攻击力/速度为不低于设定数值，'
+                                         '防御力/魔力为不高于设定数值，0为不判断')
                     target_length = 6
                 else:
-                    target_prompt = ('请输入五项:(生命值/攻击力/防御力/速度/魔力) '
-                                     '生命值/攻击力/速度为不低于设定数值，'
-                                     '防御力/魔力为不高于设定数值，0为不判断')
+                    if xd_mode == 'base':
+                        target_prompt = ('请输入五项:(体力/力量/耐力/敏捷/智力) '
+                                         '各项为不低于设定数值，0为不判断')
+                    else:
+                        target_prompt = ('请输入五项:(生命值/攻击力/防御力/速度/魔力) '
+                                         '生命值/攻击力/速度为不低于设定数值，'
+                                         '防御力/魔力为不高于设定数值，0为不判断')
                     target_length = 5
                 target_values = input([target_prompt]).split()
                 if len(target_values) != target_length:
@@ -2971,7 +3004,7 @@ def xd(s, str2, xz, num, switch_server):
                 pending_result = True
                 continue
 
-            if _is_xd_target_reached(pet, wx):
+            if _is_xd_target_reached(pet, wx, xd_mode):
                 print('洗点成功，一共洗点%d次' % xd_count)
                 action = _get_xd_continue_action()
                 if action == '':
