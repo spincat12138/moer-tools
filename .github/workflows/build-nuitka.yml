@@ -19,8 +19,6 @@ jobs:
         include:
           - name: moer
             script: moer.py
-          - name: autobattle
-            script: autobattle.py
 
     steps:
       - name: Check out source

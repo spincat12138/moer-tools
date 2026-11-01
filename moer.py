@@ -1,13 +1,16 @@
 from urllib import parse
 import time, struct, random, socket, hashlib, threading, weakref
+import sqlite3
+import sys
 from collections import deque
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
-import re
 
 from uncompyle6.parsers.reducecheck import tryexcept
 
 from item_names import ITEM_NAMES as _ITEM_NAMES
+from pet_names import PET_NAMES as _PET_NAMES
 
 cz = 0
 wx = [0, 0, 0, 0, 0]
@@ -44,10 +47,9 @@ _ATTR_KEYS = ('physique', 'strength', 'endurance', 'quick', 'intelligence')
 _XD_VALUE_KEYS = ('hp_max', 'attack', 'defense', 'speed', 'mp_max')
 _XD_LOWER_BOUND_INDICES = (0, 1, 3)
 _XD_BASE_VALUE_KEYS = ('physique', 'strength', 'endurance', 'quick', 'intelligence')
+_XD_ITEM_TYPES = ('绿色成长', '红色成长', '大丸子', '紫色五项', '红色五项')
 _KD_VALUE_KEYS = ('grow_value', 'hp_max', 'attack', 'defense', 'speed', 'mp_max')
 _KD_LOWER_BOUND_INDICES = (0, 1, 2, 4)
-_active_pet_result_key = None
-_active_pet_result_path = None
 _PET_POSITION_NAMES = {
     1: '宠物背包',
     2: '待命',
@@ -61,35 +63,86 @@ def _get_item_name(item_id):
     return _ITEM_NAMES.get(item_id, '未知物品（Item ID：%d）' % item_id)
 
 
-def _save_pet_result(pet, pet_number, session_key):
-    """保存单只宠物属性；同一连续记录流追加到同一 TXT 文件。"""
-    global _active_pet_result_key
-    global _active_pet_result_path
+def _get_pet_name(type_id):
+    """返回精灵类型名称；未知类型保留 ID 便于补充映射。"""
+    return _PET_NAMES.get(type_id, '未知精灵_%d' % type_id)
 
-    content = (
-        '您的第%d个宠物是：%s,成长值%s\n'
-        '体力%s   生命值%s\n'
-        '力量%s  攻击力%s\n'
-        '耐力%s  防御%s\n'
-        '敏捷%s  速度%s\n'
-        '智力%s  魔力%s\n'
-    ) % (
-        pet_number, pet['nick'], pet['grow_value'], pet['physique'], pet['hp_max'],
-        pet['strength'], pet['attack'], pet['endurance'], pet['defense'],
-        pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max'])
-    safe_nick = re.sub(r'[<>:"/\\|?*]', '_', pet['nick']).strip(' .') or '宠物'
-    if session_key != _active_pet_result_key:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-        output_dir = Path(__file__).resolve().parent / 'pet_results'
-        output_dir.mkdir(exist_ok=True)
-        _active_pet_result_path = output_dir / ('%s_%s.txt' % (timestamp, safe_nick))
-        _active_pet_result_key = session_key
-        _active_pet_result_path.write_text(content, encoding='utf-8')
-    else:
-        with _active_pet_result_path.open('a', encoding='utf-8') as result_file:
-            result_file.write('\n' + content)
-    output_path = _active_pet_result_path
-    # print('宠物结果已保存：%s' % output_path)
+
+def _get_application_dir():
+    """返回源码目录；打包运行时返回可执行文件所在目录。"""
+    compiled = globals().get('__compiled__')
+    if compiled is not None:
+        containing_dir = getattr(compiled, 'containing_dir', None)
+        if containing_dir:
+            return Path(containing_dir).resolve()
+        return Path(sys.argv[0]).resolve().parent
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _record_pet_result(pet, operation, item_type=None):
+    """将一次洗宠或开蛋结果写入 SQLite 数据库。"""
+    database_path = _get_application_dir() / 'pet_results.db'
+    with closing(sqlite3.connect(database_path, timeout=30)) as connection:
+        with connection:
+            connection.execute('''
+                CREATE TABLE IF NOT EXISTS pet_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recorded_at TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    item_type TEXT,
+                    pet_level INTEGER,
+                    pet_name TEXT NOT NULL,
+                    nickname TEXT NOT NULL,
+                    growth INTEGER NOT NULL,
+                    physique INTEGER NOT NULL,
+                    hp INTEGER NOT NULL,
+                    strength INTEGER NOT NULL,
+                    attack INTEGER NOT NULL,
+                    endurance INTEGER NOT NULL,
+                    defense INTEGER NOT NULL,
+                    agility INTEGER NOT NULL,
+                    speed INTEGER NOT NULL,
+                    intelligence INTEGER NOT NULL,
+                    magic INTEGER NOT NULL
+                )
+            ''')
+            columns = {
+                row[1]
+                for row in connection.execute('PRAGMA table_info(pet_results)')
+            }
+            if 'item_type' not in columns:
+                connection.execute(
+                    'ALTER TABLE pet_results ADD COLUMN item_type TEXT')
+            if 'pet_level' not in columns:
+                connection.execute(
+                    'ALTER TABLE pet_results ADD COLUMN pet_level INTEGER')
+            connection.execute('''
+                INSERT INTO pet_results (
+                    recorded_at, operation, item_type, pet_level, pet_name,
+                    nickname, growth, physique, hp, strength, attack,
+                    endurance, defense, agility, speed, intelligence, magic
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                datetime.now().astimezone().isoformat(timespec='seconds'),
+                operation,
+                item_type,
+                pet['level'],
+                _get_pet_name(pet['type_id']),
+                pet['nick'],
+                pet['grow_value'],
+                pet['physique'],
+                pet['hp_max'],
+                pet['strength'],
+                pet['attack'],
+                pet['endurance'],
+                pet['defense'],
+                pet['quick'],
+                pet['speed'],
+                pet['intelligence'],
+                pet['mp_max'],
+            ))
 
 
 class SocketSession:
@@ -417,14 +470,14 @@ def kaipai(uid, pwd, model, fwq=0):
                 if type == 1:
                     openbook(s2, str2)
                 elif type == 2:
-                    openjmbox(s2, str2, 360037)
+                    openbox(s2, str2, 360037)
                 elif type == 3:
                     openjmbox(s2, str2, 300100)
                 elif type == 4:
                     openzybox(s2, str2)
                 else:
                     id = int(input(['请输入要开启的物品代码']))
-                    openjmbox(s2, str2, id)
+                    openbox(s2, str2, id)
             if m == 4:
                 bag_store_operations(s2, str2)
             if m == 5:
@@ -2428,6 +2481,19 @@ def _parse_exchange_bless_gift_response(packet):
     }
 
 
+def openbox(s, str2, id=300100):
+    id = hex(id)[2:].zfill(6)
+    packet = [0, 0, 0, 22, 4, 103, *str2, 0, 0, 5, 251, 0, 0, 0, 0, 0, int(id[0:2], base=16), int(id[2:4], base=16),
+              int(id[4:6], base=16)]
+    t1 = tuple(packet)
+    req = struct.pack(*('22B',), *t1)
+    num = int(input('请输入开启数量'))
+    for i in range(num):
+        s.send(req)
+        if i % 50 == 0:
+            time.sleep(0.5)
+
+
 def openjmbox(s, str2, id=300100):
     """兑换并逐个开启吉姆宝箱，失败开箱不消耗本地箱子计数。"""
     print("说明：自动兑换吉姆宝箱并开启，可以通过堆满背包的方式卡职业箱子。\n使用方法：使用前清空收集品背包和可消耗品背包；在收集品中放入99个魔力水晶，并用其他吉姆宝箱中无法开出的物品填充满；在可消耗品中放入1个需要卡的职业箱子，留一个空位，然后其余用吉姆宝箱中无法开出的物品填充满\n")
@@ -2931,7 +2997,7 @@ def xd(s, str2, xz, num, switch_server):
 
         pet = a[xz]
         if pending_result:
-            _save_pet_result(pet, xz + 1, ('xd', tuple(pet['pet_id_bytes'])))
+            _record_pet_result(pet, '洗宠', _XD_ITEM_TYPES[num])
             pending_result = False
         print('成长%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
             pet['grow_value'], pet['physique'], pet['hp_max'], pet['strength'], pet['attack'],
@@ -3137,7 +3203,7 @@ def kd(s, str2, switch_server):
 
         num = 0
         for x, pet in enumerate(a):
-            _save_pet_result(pet, x + 1, ('kd', petid))
+            _record_pet_result(pet, '开蛋')
             print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
                 x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
             if _is_kd_target_reached(pet, expectwx):
@@ -4729,6 +4795,10 @@ def fpexp099(s, str2):
         if packet_count % 10 == 0 and remaining_exp > 0:
             time.sleep(0.25)
     print('已向宠物%s分配60796449经验' % selected_pet['nick'])
+
+    # 自动分配点数
+    send_packet([0, 0, 0, 0x16, 0x06, 0x43, *str2, 0, 0, 5,
+                         random.randint(0, 255), 0, 0, 0, 0, *pet_id])
 
 if __name__ == '__main__':
     login_interface('account.txt')

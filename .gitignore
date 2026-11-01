@@ -5,3 +5,4 @@ doc/*
 *.exe
 wpe/*
 pet_results
+pet_results.db
