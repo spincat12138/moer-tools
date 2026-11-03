@@ -4858,8 +4858,9 @@ def fpexp099(s, str2):
     print('已向宠物%s分配60796449经验' % selected_pet['nick'])
 
     # 自动分配点数
-    send_packet([0, 0, 0, 0x16, 0x06, 0x43, *str2, 0, 0, 5,
-                         random.randint(0, 255), 0, 0, 0, 0, *pet_id])
+    packet = [0, 0, 0, 0x16, 0x06, 0x43, *str2, 0, 0, 5,
+                         random.randint(0, 255), 0, 0, 0, 0, *pet_id]
+    s.send(struct.pack('22B', *packet))
 
 if __name__ == '__main__':
     login_interface('account.txt')
