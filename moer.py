@@ -57,6 +57,33 @@ _PET_POSITION_NAMES = {
     4: '辅助',
 }
 
+_FEATURE_LABELS = {
+    1: '砸罐子',
+    2: '分经验',
+    3: '开书/丸子包/箱子',
+    4: '背包/仓库操作',
+    5: '丢仓库宠物',
+    6: '洗点',
+    7: '开蛋',
+    8: '兑换水晶',
+    9: '兑换奖牌/礼物',
+    10: '一键洗点/加点',
+    11: '一键升级0转99级',
+}
+
+
+def _normalize_enabled_features(enabled_features):
+    if enabled_features is None:
+        return None
+
+    features = frozenset(enabled_features)
+    invalid_features = features.difference(_FEATURE_LABELS)
+    if invalid_features:
+        raise ValueError('不存在的功能编号：%s' % sorted(invalid_features))
+    if not features:
+        raise ValueError('至少需要启用一个功能')
+    return features
+
 
 def _get_item_name(item_id):
     """返回 Item ID 对应的中文名，并明确标记资料中缺失的 ID。"""
@@ -230,15 +257,33 @@ def _get_socket_session(sock):
         return session
 
 
-def login_interface(myfile='account.txt'):
+def login_interface(myfile='account.txt', enabled_features=None):
     global mmh, mmh_mm
+    enabled_features = _normalize_enabled_features(enabled_features)
+    available_features = (set(_FEATURE_LABELS) if enabled_features is None
+                          else enabled_features)
     account = get_account(myfile)
     mmh_list = []
     for key in sorted(account):
         mmh_list.append(key)
     account_len = len(account)
     while account_len != 0:
-        md = int(input(['请选择模式：1.经典模式 2.一键砸罐子模式 3.一键分经验模式']))
+        available_modes = []
+        if available_features:
+            available_modes.append('1.经典模式')
+        if 1 in available_features:
+            available_modes.append('2.一键砸罐子模式')
+        if 2 in available_features:
+            available_modes.append('3.一键分经验模式')
+        md = int(input(['请选择模式：' + ' '.join(available_modes) + ' 0退出']))
+        if md == 2 and 1 not in available_features:
+            print('该精简版未启用砸罐子功能')
+            continue
+        if md == 3 and 2 not in available_features:
+            print('该精简版未启用分经验功能')
+            continue
+        if md not in (1, 2, 3):
+            return
         while md == 1:
             num = 0
             for x in mmh_list:
@@ -250,10 +295,12 @@ def login_interface(myfile='account.txt'):
                 mmh = int(mmh_list[i - 1])
                 mmh_mm = account[mmh_list[i - 1]]
                 if m == 1:
-                    kaipai(mmh, mmh_mm, 1)
+                    kaipai(mmh, mmh_mm, 1,
+                           enabled_features=enabled_features)
                 elif m == 2:
                     fwq = int(input(['请输入服务器']))
-                    kaipai(mmh, mmh_mm, 1, fwq)
+                    kaipai(mmh, mmh_mm, 1, fwq,
+                           enabled_features=enabled_features)
                 else:
                     return
             elif i > account_len:
@@ -268,6 +315,7 @@ def login_interface(myfile='account.txt'):
                     thread = threading.Thread(
                         target=kaipai,
                         args=(int(mmh_list[x]), account[mmh_list[x]], 2),
+                        kwargs={'enabled_features': enabled_features},
                     )
                     thread.start()
                     threads.append(thread)
@@ -288,6 +336,7 @@ def login_interface(myfile='account.txt'):
                     thread = threading.Thread(
                         target=kaipai,
                         args=(int(mmh_list[x]), account[mmh_list[x]], 3),
+                        kwargs={'enabled_features': enabled_features},
                     )
                     thread.start()
                     threads.append(thread)
@@ -446,7 +495,12 @@ def _switch_server(uid, pwd, login_socket, game_socket, current_fwq):
     return new_login_socket, new_game_socket, str2, next_fwq
 
 
-def kaipai(uid, pwd, model, fwq=0):
+def kaipai(uid, pwd, model, fwq=0, enabled_features=None):
+    enabled_features = _normalize_enabled_features(enabled_features)
+    if enabled_features is not None:
+        required_feature = {2: 1, 3: 2}.get(model)
+        if required_feature is not None and required_feature not in enabled_features:
+            raise ValueError('当前版本未启用功能：%s' % _FEATURE_LABELS[required_feature])
 
     s, s2, str2, current_fwq = login_taomi(uid, pwd, model, fwq, return_server=True)
 
@@ -458,9 +512,16 @@ def kaipai(uid, pwd, model, fwq=0):
 
     if model == 1:
         m = 1
+        visible_features = (set(_FEATURE_LABELS) if enabled_features is None
+                            else enabled_features)
+        menu_items = ['%d%s' % (number, _FEATURE_LABELS[number])
+                      for number in sorted(visible_features)]
+        menu_prompt = '请输入要使用的功能：%s,0退出' % ','.join(menu_items)
         while m != 0:
-            m = int(input(
-                ['请输入要使用的功能：1砸罐子,2分经验,3开书/丸子包/箱子,4背包/仓库操作,5丢仓库宠物,6洗点,7开蛋,8兑换水晶,9兑换奖牌/礼物,10一键洗点/加点,11一键升级0转99级,0退出']))
+            m = int(input([menu_prompt]))
+            if enabled_features is not None and m not in enabled_features and m != 0:
+                print('该精简版未启用此功能')
+                continue
             if m == 1:
                 zgz(s2, str2)
             if m == 2:
