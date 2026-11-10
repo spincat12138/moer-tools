@@ -48,6 +48,7 @@ _XD_VALUE_KEYS = ('hp_max', 'attack', 'defense', 'speed', 'mp_max')
 _XD_LOWER_BOUND_INDICES = (0, 1, 3)
 _XD_BASE_VALUE_KEYS = ('physique', 'strength', 'endurance', 'quick', 'intelligence')
 _XD_ITEM_TYPES = ('绿色成长', '红色成长', '大丸子', '紫色五项', '红色五项')
+_XD_ITEM_IDS = (350013, 360008, 360038, 350014, 360009)
 _KD_VALUE_KEYS = ('grow_value', 'hp_max', 'attack', 'defense', 'speed', 'mp_max')
 _KD_LOWER_BOUND_INDICES = (0, 1, 2, 4)
 _PET_POSITION_NAMES = {
@@ -108,7 +109,7 @@ def _get_application_dir():
     return Path(__file__).resolve().parent
 
 
-def _record_pet_result(pet, operation, item_type=None):
+def _record_pet_result(pet, operation, uid, fwq, item_type=None):
     """将一次洗宠或开蛋结果写入 SQLite 数据库。"""
     database_path = _get_application_dir() / 'pet_results.db'
     with closing(sqlite3.connect(database_path, timeout=30)) as connection:
@@ -118,6 +119,8 @@ def _record_pet_result(pet, operation, item_type=None):
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     recorded_at TEXT NOT NULL,
                     operation TEXT NOT NULL,
+                    uid INTEGER,
+                    fwq INTEGER,
                     item_type TEXT,
                     pet_level INTEGER,
                     pet_name TEXT NOT NULL,
@@ -145,15 +148,24 @@ def _record_pet_result(pet, operation, item_type=None):
             if 'pet_level' not in columns:
                 connection.execute(
                     'ALTER TABLE pet_results ADD COLUMN pet_level INTEGER')
+            if 'uid' not in columns:
+                connection.execute(
+                    'ALTER TABLE pet_results ADD COLUMN uid INTEGER')
+            if 'fwq' not in columns:
+                connection.execute(
+                    'ALTER TABLE pet_results ADD COLUMN fwq INTEGER')
             connection.execute('''
                 INSERT INTO pet_results (
-                    recorded_at, operation, item_type, pet_level, pet_name,
-                    nickname, growth, physique, hp, strength, attack,
-                    endurance, defense, agility, speed, intelligence, magic
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    recorded_at, operation, uid, fwq, item_type, pet_level,
+                    pet_name, nickname, growth, physique, hp, strength,
+                    attack, endurance, defense, agility, speed, intelligence,
+                    magic
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 datetime.now().astimezone().isoformat(timespec='seconds'),
                 operation,
+                uid,
+                fwq,
                 item_type,
                 pet['level'],
                 _get_pet_name(pet['type_id']),
@@ -510,6 +522,9 @@ def kaipai(uid, pwd, model, fwq=0, enabled_features=None):
             uid, pwd, s, s2, current_fwq)
         return s2, str2
 
+    def get_current_fwq():
+        return current_fwq
+
     if model == 1:
         m = 1
         visible_features = (set(_FEATURE_LABELS) if enabled_features is None
@@ -544,9 +559,9 @@ def kaipai(uid, pwd, model, fwq=0, enabled_features=None):
             if m == 5:
                 fscw(s2, str2)
             if m == 6:
-                xd_menu(s2, str2, switch_server)
+                xd_menu(s2, str2, switch_server, uid, get_current_fwq)
             if m == 7:
-                kd(s2, str2, switch_server)
+                kd(s2, str2, switch_server, uid, get_current_fwq)
             if m == 8:
                 excrystal(s2, str2)
             if m == 9:
@@ -3009,7 +3024,7 @@ def _get_xd_continue_action():
         '[按回车使用相同设置重试，输入886换服继续，按0返回]')
 
 
-def xd_menu(s, str2, switch_server):
+def xd_menu(s, str2, switch_server, uid, get_current_fwq):
     """洗点子菜单；每次结束后重新选择宠物，输入 0 返回主功能菜单。"""
     session = {'game_socket': s, 'str2': str2}
 
@@ -3018,11 +3033,11 @@ def xd_menu(s, str2, switch_server):
         return session['game_socket'], session['str2']
 
     while not xd(session['game_socket'], session['str2'], -1, -1,
-                 switch_and_update_session):
+                 switch_and_update_session, uid, get_current_fwq):
         pass
 
 
-def xd(s, str2, xz, num, switch_server):
+def xd(s, str2, xz, num, switch_server, uid, get_current_fwq):
     global cz
     global wx
     global xd_count
@@ -3033,6 +3048,7 @@ def xd(s, str2, xz, num, switch_server):
     if xz == -1:
         _reset_xd_state()
     pending_result = False
+    item_quantities = None
 
     while True:
         pet_data = _load_xd_pets(s, str2)
@@ -3058,11 +3074,15 @@ def xd(s, str2, xz, num, switch_server):
 
         pet = a[xz]
         if pending_result:
-            _record_pet_result(pet, '洗宠', _XD_ITEM_TYPES[num])
+            _record_pet_result(
+                pet, '洗宠', uid, get_current_fwq(), _XD_ITEM_TYPES[num])
             pending_result = False
         print('成长%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
             pet['grow_value'], pet['physique'], pet['hp_max'], pet['strength'], pet['attack'],
             pet['endurance'], pet['defense'], pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
+
+        if item_quantities is None:
+            item_quantities = _get_xd_item_quantities(s, str2)
 
         if num == -1:
             num = int(input('选择丸子1绿色成长2红色成长3大丸子4紫色五项5红色五项(按0退出)')) - 1
@@ -3077,7 +3097,7 @@ def xd(s, str2, xz, num, switch_server):
                 print('洗成长成功，一共洗点%d次' % xd_count)
                 _reset_xd_state()
                 return False
-            eatwz(s, str2, pet, num)
+            eatwz(s, str2, pet, num, item_quantities)
             pending_result = True
             continue
 
@@ -3127,7 +3147,7 @@ def xd(s, str2, xz, num, switch_server):
                     print('洗点次数必须大于0')
                     _reset_xd_state()
                     return False
-                eatwz(s, str2, pet, num)
+                eatwz(s, str2, pet, num, item_quantities)
                 pending_result = True
                 continue
 
@@ -3136,7 +3156,7 @@ def xd(s, str2, xz, num, switch_server):
                 action = _get_xd_continue_action()
                 if action == '':
                     xd_count = 0
-                    eatwz(s, str2, pet, num)
+                    eatwz(s, str2, pet, num, item_quantities)
                     pending_result = True
                     continue
                 if action == '886':
@@ -3150,7 +3170,7 @@ def xd(s, str2, xz, num, switch_server):
                 action = _get_xd_continue_action()
                 if action == '':
                     xd_count = 0
-                    eatwz(s, str2, pet, num)
+                    eatwz(s, str2, pet, num, item_quantities)
                     pending_result = True
                     continue
                 if action == '886':
@@ -3161,7 +3181,7 @@ def xd(s, str2, xz, num, switch_server):
                 return False
 
             print('不满足')
-            eatwz(s, str2, pet, num)
+            eatwz(s, str2, pet, num, item_quantities)
             pending_result = True
             continue
 
@@ -3179,16 +3199,29 @@ def _load_xd_pets(s, str2):
     return _get_pet_bag(s, str2)
 
 
-def eatwz(s, str2, pet, num):
+def _get_xd_item_quantities(s, str2):
+    """获取洗点所用五种道具在背包中的数量。"""
+    prop_info, _ = _get_prop_bag_info(s, str2)
+    quantities = {item_id: 0 for item_id in _XD_ITEM_IDS}
+    for prop in prop_info:
+        item_id = prop['item_id']
+        if item_id in quantities:
+            quantities[item_id] += prop['quantity']
+    return quantities
+
+
+def eatwz(s, str2, pet, num, item_quantities):
     global xd_count
-    wanzi = [350013, 360008, 360038, 350014, 360009]
-    packet = [0, 0, 0, 26, 6, 34, *str2, 0, 0, 5, 172, 0, 0, 0, 0, *pet['pet_id_bytes'], 0, int(wanzi[num] / 65536),
-              int(wanzi[num] % 65536 / 256), int(wanzi[num] % 256)]
+    item_id = _XD_ITEM_IDS[num]
+    packet = [0, 0, 0, 26, 6, 34, *str2, 0, 0, 5, 172, 0, 0, 0, 0,
+              *pet['pet_id_bytes'], *item_id.to_bytes(4, byteorder='big')]
     t1 = tuple(packet)
     req = struct.pack(*('26B',), *t1)
     s.send(req)
     xd_count += 1
-    time.sleep(0.4)
+    time.sleep(0.2)
+    item_quantities[item_id] -= 1
+    print('%s剩余数量：%d' % (_XD_ITEM_TYPES[num], item_quantities[item_id]))
 
 
 def _fetch_item_from_store(s, str2, item_id, quantity):
@@ -3214,7 +3247,7 @@ def _get_kd_continue_action(petid):
         _get_item_name(petid))
 
 
-def kd(s, str2, switch_server):
+def kd(s, str2, switch_server, uid, get_current_fwq):
     petid = int(input(['请输入开蛋的编号']))
     packet = [0, 0, 0, 22, 7, 208, *str2, 0, 0, 5, 179, 0, 0, 0, 0, *str2]
     t1 = tuple(packet)
@@ -3264,7 +3297,7 @@ def kd(s, str2, switch_server):
 
         num = 0
         for x, pet in enumerate(a):
-            _record_pet_result(pet, '开蛋')
+            _record_pet_result(pet, '开蛋', uid, get_current_fwq())
             print('您的第%d个宠物是：%s,成长值%s\n体力%s\t生命值%s\n力量%s\t攻击力%s\n耐力%s\t防御%s\n敏捷%s\t速度%s\n智力%s\t魔力%s' % (
                 x + 1, pet['nick'], pet['grow_value'],pet['physique'], pet['hp_max'], pet['strength'], pet['attack'], pet['endurance'], pet['defense'],pet['quick'], pet['speed'], pet['intelligence'], pet['mp_max']))
             if _is_kd_target_reached(pet, expectwx):
@@ -4347,6 +4380,9 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
                 # 刷食人花
                 packet = [0, 0, 0, *[0x1a, 0x05, 0x18], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0,
                           0x1e, 0, 0, 0, 0]
+                # # 高级骷髅王
+                # packet = [0, 0, 0, *[0x1a, 0x05, 0x18], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0, 0x0b,
+                #           0x5e, 0, 0, 0, 0]
                 req = struct.pack(*('26B',), *packet)
                 s.send(req)
                 sleep_for_battle(0.1)
