@@ -2340,7 +2340,7 @@ def cleanequipment(s, str2):
         if (inid >= 80074 and inid <= 80077) or (inid >= 130005 and inid <= 130006):
             _equipment_discard(s, str2, inid, item['instance_id'])    
         
-        if (inid >= 130007 and inid <= 130011) or (inid >= 120001 and inid <= 120004) or (
+        if (inid >= 130008 and inid <= 130011) or (inid >= 120001 and inid <= 120004) or (
                 inid >= 130001 and inid <= 130004):
             _equipment_sell(s, str2, inid, item['instance_id'])
         
@@ -4330,7 +4330,7 @@ def battle(s, str2, position, turn_wait, end_wait, login_socket=None, reconnect_
     elif position == 7:
         # 平原1
         packet = [0, 0, 0, *[0x26, 0x03, 0xec], *str2, 0, 0, 5, random.randint(0, 255), 0, 0, 0, 0, 0, 0,
-                    *[0x53, 0x35], 0, 0, 0, 0, 0, 0, *[0x05, 0xfb], 0, 0, *[0x01, 0xdd], 0, 0, 0, 0]
+                    *[0x53, 0x39], 0, 0, 0, 0, 0, 0, *[0x05, 0xfb], 0, 0, *[0x01, 0xdd], 0, 0, 0, 0]
         req = struct.pack(*('38B',), *packet)
         s.send(req)
         time.sleep(0.3)
