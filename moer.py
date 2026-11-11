@@ -1455,6 +1455,101 @@ def _get_pet_bag(s, str2):
     return {'pet_count': pet_count, 'pets': pets}
 
 
+def _get_pet_info(s, str2, pet_id):
+    """通过宠物 ID 请求并解析 1553（PET_GETINFO）详细信息。"""
+    if not isinstance(pet_id, int) or isinstance(pet_id, bool):
+        raise ValueError('宠物ID必须是uint32正整数')
+    if pet_id <= 0 or pet_id > 0xFFFFFFFF:
+        raise ValueError('宠物ID必须是uint32正整数')
+
+    packet = [0, 0, 0, 22, 6, 17, *str2, 0, 0, 4,
+              random.randint(0, 255), 0, 0, 0, 0,
+              *pet_id.to_bytes(4, byteorder='big')]
+    s.send(struct.pack('22B', *packet))
+    response = _receive_bag_response(s, str2, 1553, '宠物详细信息')
+
+    description = '%s获取宠物详细信息失败' % str2
+    pet, offset = _parse_pet_info(response, _TMF_HEADER_SIZE, description)
+    if offset != len(response):
+        raise ValueError('%s：包尾存在未解析数据' % description)
+    if pet['pet_id'] != pet_id:
+        raise ValueError('%s：宠物ID不匹配（期望%d，实际%d）' %
+                         (description, pet_id, pet['pet_id']))
+    return pet
+
+
+def _parse_pet_store_info(data, offset, description):
+    """按客户端 PetStorehouseInfo 构造函数解析一条仓库宠物记录。"""
+    record_size = 33
+    if offset + record_size > len(data):
+        raise ValueError('%s：宠物记录被截断' % description)
+
+    pet_id, type_id = struct.unpack_from('>II', data, offset)
+    race = data[offset + 8]
+    nick = data[offset + 9:offset + 25].split(b'\x00', 1)[0].decode(
+        'utf-8', errors='replace')
+    level, location = struct.unpack_from('>II', data, offset + 25)
+    return {
+        'pet_id': pet_id,
+        'pet_id_bytes': tuple(pet_id.to_bytes(4, byteorder='big')),
+        'type_id': type_id,
+        'race': race,
+        'nick': nick,
+        'level': level,
+        'location': location,
+    }, offset + record_size
+
+
+def _get_pet_store(s, str2):
+    """请求并解析 1559（STORAGE_PET_LIST）宠物仓库信息。"""
+    page_size = 910
+    start_index = 0
+    total_count = None
+    pets = []
+    description = '%s获取宠物仓库列表失败' % str2
+
+    while True:
+        packet = [0, 0, 0, 26, 6, 23, *str2, 0, 0, 6, 165,
+                  0, 0, 0, 0,
+                  *start_index.to_bytes(4, byteorder='big'),
+                  *page_size.to_bytes(4, byteorder='big')]
+        s.send(struct.pack('26B', *packet))
+        response = _receive_bag_response(s, str2, 1559, '宠物仓库列表')
+
+        if len(response) < _TMF_HEADER_SIZE + 12:
+            raise ValueError('%s：缺少分页信息' % description)
+        response_total, response_start, page_count = struct.unpack_from(
+            '>III', response, _TMF_HEADER_SIZE)
+        offset = _TMF_HEADER_SIZE + 12
+
+        if response_start != start_index:
+            raise ValueError('%s：分页起始位置不匹配' % description)
+        if total_count is None:
+            total_count = response_total
+        elif response_total != total_count:
+            raise ValueError('%s：分页总数不一致' % description)
+        if response_start > total_count or page_count > total_count - response_start:
+            raise ValueError('%s：分页数量超出宠物总数' % description)
+        if page_count > (len(response) - offset) // 33:
+            raise ValueError('%s：宠物数量与包长不匹配' % description)
+
+        for _ in range(page_count):
+            pet, offset = _parse_pet_store_info(response, offset, description)
+            pets.append(pet)
+
+        if offset != len(response):
+            raise ValueError('%s：包尾存在未解析数据' % description)
+        if len(pets) >= total_count:
+            break
+        if page_count == 0:
+            raise ValueError('%s：分页未返回宠物数据' % description)
+        start_index = response_start + page_count
+
+    if len(pets) != total_count:
+        raise ValueError('%s：实际宠物数量与总数不一致' % description)
+    return {'pet_count': total_count, 'pets': pets}
+
+
 def fjy(s, str2, num):
 
     pet_data = _get_pet_bag(s, str2)
@@ -1628,68 +1723,28 @@ def jsexp(tr, low):
         return exp + 10
 
 def fscw(s, str2):
-    packet = [0, 0, 0, 26, 6, 23, *str2, 0, 0, 6, 165, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 142]
-    t1 = tuple(packet)
-    req = struct.pack(*('26B',), *t1)
-    s.send(req)
-    rec = s.recv(50000)
-    s.send(req)
-    rec1 = s.recv(50000)
-    r = tuple(rec1)
-    times = 0
-    while r.__len__() < 30 or r[5] != 23:
-        s.send(req)
-        rec = s.recv(50000)
-        s.send(req)
-        rec1 = s.recv(50000)
-        r = tuple(rec1)
-        time.sleep(0.5)
-        if times < 20:
-            times += 1
-        else:
-            print('%s获取宠物仓库列表失败' % str2)
-            return
+    try:
+        pet_data = _get_pet_store(s, str2)
+    except (ConnectionError, ValueError) as exc:
+        print(exc)
+        return
 
-    # packet = [0, 0, 0, 18, 6, 18, *str2, 0, 0, 6, 83, 0, 0, 0, 0]
-    # t1 = tuple(packet)
-    # req = (struct.pack)(*('18B', ), *t1)
-    # s.send(req)
-    # rec = s.recv(30000)
-    # r = tuple(rec)
-    # print(r.__len__())
-
-    i = _byte_to_int(r[28:30], 2)
+    pets = pet_data['pets']
+    i = pet_data['pet_count']
     print('共有%d只宠物' % i)
-    x = 0
-    a = [[] for b in range(i)]
-    b = 30
-    k = 0
-    t = 33
-    while b < r.__len__():
-        if k == t:
-            if x < i - 1:
-                x += 1
-                k = 0
-                t = 33
-            else:
-                break
-        a[x].append(int(r[b]))
-        b = b + 1
-        k = k + 1
+    for index, pet in enumerate(pets, start=1):
+        print('您的第%d个宠物是：%s,等级是%d' %
+              (index, pet['nick'], pet['level']))
 
-    for x in range(i):
-        print('您的第%d个宠物是：%s,等级是%d' % (x + 1, getname(a[x][9:28]), a[x][28]))
-
-    name = input(['请输入要丢弃宠物的名字'])
-    dj = int(input(['请输入要丢弃宠物的等级']))
+    name = input('请输入要丢弃宠物的名字')
+    dj = int(input('请输入要丢弃宠物的等级'))
 
     count = 0
-    for x in range(i):
-        if (a[x][28] == dj) and getname(a[x][9:28]) == name:
-            packet = [0, 0, 0, 22, 6, 25, *str2, 0, 0, 8, 34, 0, 0, 0, 0, *a[x][0:4]]
-            t1 = tuple(packet)
-            req = struct.pack(*('22B',), *t1)
-            s.send(req)
+    for pet in pets:
+        if pet['level'] == dj and pet['nick'] == name:
+            packet = [0, 0, 0, 22, 6, 25, *str2, 0, 0, 8, 34,
+                      0, 0, 0, 0, *pet['pet_id_bytes']]
+            s.send(struct.pack('22B', *packet))
             count += 1
     print('放生成功，共放生%d只宠物' % count)
 
@@ -2983,8 +3038,8 @@ def _is_xd_target_reached(pet, target, mode='derived'):
         if mode == 'base':
             current = (pet['grow_value'],) + tuple(
                 pet[key] for key in _XD_BASE_VALUE_KEYS)
-            lower_bound_indices = tuple(range(6))
-            upper_bound_indices = ()
+            lower_bound_indices = (0, 1, 2, 4)
+            upper_bound_indices = (3, 5)
         else:
             # 派生属性模式沿用开蛋目标的上下限方向。
             current = tuple(pet[key] for key in _KD_VALUE_KEYS)
@@ -2993,8 +3048,8 @@ def _is_xd_target_reached(pet, target, mode='derived'):
     else:
         if mode == 'base':
             current = tuple(pet[key] for key in _XD_BASE_VALUE_KEYS)
-            lower_bound_indices = tuple(range(5))
-            upper_bound_indices = ()
+            lower_bound_indices = (0, 1, 3)
+            upper_bound_indices = (2, 4)
         else:
             current = tuple(pet[key] for key in _XD_VALUE_KEYS)
             lower_bound_indices = _XD_LOWER_BOUND_INDICES
@@ -3116,7 +3171,8 @@ def xd(s, str2, xz, num, switch_server, uid, get_current_fwq):
                 if num == 2:
                     if xd_mode == 'base':
                         target_prompt = ('请输入成长+五项:(成长/体力/力量/耐力/敏捷/智力) '
-                                         '各项为不低于设定数值，0为不判断')
+                                         '成长/体力/力量/敏捷为不低于设定数值，'
+                                         '耐力/智力为不高于设定数值，0为不判断')
                     else:
                         target_prompt = ('请输入成长+五项:(成长/生命值/攻击力/防御力/速度/魔力) '
                                          '成长/生命值/攻击力/速度为不低于设定数值，'
@@ -3125,7 +3181,8 @@ def xd(s, str2, xz, num, switch_server, uid, get_current_fwq):
                 else:
                     if xd_mode == 'base':
                         target_prompt = ('请输入五项:(体力/力量/耐力/敏捷/智力) '
-                                         '各项为不低于设定数值，0为不判断')
+                                         '体力/力量/敏捷为不低于设定数值，'
+                                         '耐力/智力为不高于设定数值，0为不判断')
                     else:
                         target_prompt = ('请输入五项:(生命值/攻击力/防御力/速度/魔力) '
                                          '生命值/攻击力/速度为不低于设定数值，'
@@ -3361,18 +3418,75 @@ def kd(s, str2, switch_server, uid, get_current_fwq):
             return
 
 
+def _change_pet_status(s, str2, pet, status):
+    """通过 1551（PET_CHANGE_FLAG）切换宠物所在位置。"""
+    if status not in (0, 1):
+        raise ValueError('宠物目标位置必须是0（仓库）或1（背包）')
+
+    if isinstance(pet, dict):
+        pet_id = pet.get('pet_id_bytes', pet.get('pet_id'))
+    else:
+        pet_id = pet
+
+    if isinstance(pet_id, int) and not isinstance(pet_id, bool):
+        if pet_id <= 0 or pet_id > 0xFFFFFFFF:
+            raise ValueError('宠物ID必须是有效的uint32正整数')
+        pet_id_bytes = pet_id.to_bytes(4, byteorder='big')
+    else:
+        try:
+            pet_id_bytes = bytes(pet_id[0:4])
+        except (TypeError, ValueError) as exc:
+            raise ValueError('宠物ID必须是uint32或4字节序列') from exc
+        if len(pet_id_bytes) != 4 or int.from_bytes(
+                pet_id_bytes, byteorder='big') == 0:
+            raise ValueError('宠物ID必须是非零的4字节序列')
+
+    packet = [0, 0, 0, 26, 6, 15, *str2, 0, 0, 5, 93,
+              0, 0, 0, 0, *pet_id_bytes, 0, 0, 0, status]
+    s.send(struct.pack('26B', *packet))
+
+
+def _pet_change_name(s, str2, pet, name):
+    """通过 1552（PET_CHANGE_NICK）修改宠物昵称。"""
+    if isinstance(pet, dict):
+        pet_id = pet.get('pet_id_bytes', pet.get('pet_id'))
+    else:
+        pet_id = pet
+
+    if isinstance(pet_id, int) and not isinstance(pet_id, bool):
+        if pet_id <= 0 or pet_id > 0xFFFFFFFF:
+            raise ValueError('宠物ID必须是有效的uint32正整数')
+    else:
+        try:
+            pet_id_bytes = bytes(pet_id[0:4])
+        except (TypeError, ValueError) as exc:
+            raise ValueError('宠物ID必须是uint32或4字节序列') from exc
+        if len(pet_id_bytes) != 4:
+            raise ValueError('宠物ID必须是uint32或4字节序列')
+        pet_id = int.from_bytes(pet_id_bytes, byteorder='big')
+        if pet_id == 0:
+            raise ValueError('宠物ID必须是非零的4字节序列')
+
+    if not isinstance(name, str):
+        raise ValueError('宠物昵称必须是字符串')
+    name_bytes = name.encode('utf-8')[:16].ljust(16, b'\x00')
+    payload = struct.pack('>I', pet_id) + name_bytes
+    s.send(_build_tmf_request(str2, 1552, payload))
+
+
+def _pet_back_store(s, str2, pet):
+    """将宠物放回仓库（1551 状态 0）。"""
+    _change_pet_status(s, str2, pet, 0)
+
+
+def _pet_back_bag(s, str2, pet):
+    """将宠物从仓库取回背包（1551 状态 1）。"""
+    _change_pet_status(s, str2, pet, 1)
+
+
 def _pet_back_home(s, str2, pet):
-    '''
-    宠物放回仓库
-    :param s: socket连接
-    :param str2: 玩家米米号
-    :param pet: 宠物信息
-    '''
-    pet_id = pet['pet_id_bytes'] if isinstance(pet, dict) else pet[0:4]
-    packet = [0, 0, 0, 0x1a, 0x06, 0x0f, *str2, 0, 0, 5, 93, 0, 0, 0, 0, *pet_id, 0, 0, 0, 0]
-    t1 = tuple(packet)
-    req = struct.pack(*('26B',), *t1)
-    s.send(req)
+    """兼容旧调用：将宠物放回仓库。"""
+    _pet_back_store(s, str2, pet)
 
 
 def pengdan(pet1, pet2, str2, s):
